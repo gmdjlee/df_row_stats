@@ -93,6 +93,7 @@ export default function App() {
           <ResultPanel
             outlierResult={outlierResult}
             statsResults={statsResults}
+            data={cleanedData || data}
           />
         )}
       </main>
