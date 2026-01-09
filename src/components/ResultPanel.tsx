@@ -1,11 +1,111 @@
-import { OutlierResult, StatsResult } from '../types';
+import { useState, useMemo, useCallback } from 'react';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
+import { OutlierResult, StatsResult, DataMatrix } from '../types';
 
 interface Props {
   outlierResult: OutlierResult | null;
   statsResults: StatsResult[] | null;
+  data: DataMatrix | null;
 }
 
-export function ResultPanel({ outlierResult, statsResults }: Props) {
+type NormalizeMode = 'none' | 'sign' | 'absolute';
+
+// Color palette for chart lines
+const COLORS = [
+  '#2563eb', '#dc2626', '#16a34a', '#ca8a04', '#9333ea',
+  '#0891b2', '#c026d3', '#ea580c', '#4f46e5', '#059669'
+];
+
+/**
+ * Determine the dominant sign for each row
+ * Returns an array of 1 (positive dominant) or -1 (negative dominant)
+ */
+function determineDominantSigns(data: number[][]): number[] {
+  const signs: number[] = [];
+
+  // First pass: determine signs based on count majority
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    let positiveCount = 0;
+    let negativeCount = 0;
+
+    for (const val of row) {
+      if (!isNaN(val)) {
+        if (val > 0) positiveCount++;
+        else if (val < 0) negativeCount++;
+      }
+    }
+
+    if (positiveCount > negativeCount) {
+      signs.push(1);
+    } else if (negativeCount > positiveCount) {
+      signs.push(-1);
+    } else {
+      // Equal count - will be resolved in second pass
+      signs.push(0);
+    }
+  }
+
+  // Second pass: resolve ties by looking at neighbors
+  for (let i = 0; i < signs.length; i++) {
+    if (signs[i] === 0) {
+      if (i === 0) {
+        // First row: look at next row
+        for (let j = 1; j < signs.length; j++) {
+          if (signs[j] !== 0) {
+            signs[i] = signs[j];
+            break;
+          }
+        }
+        // If all are ties, default to positive
+        if (signs[i] === 0) signs[i] = 1;
+      } else {
+        // Other rows: use previous row's sign
+        signs[i] = signs[i - 1];
+      }
+    }
+  }
+
+  return signs;
+}
+
+/**
+ * Apply sign normalization to data
+ * Flips signs so all values match the dominant sign of their row
+ */
+function applySignNormalization(data: number[][]): number[][] {
+  const dominantSigns = determineDominantSigns(data);
+
+  return data.map((row, i) => {
+    const dominantSign = dominantSigns[i];
+    return row.map(val => {
+      if (isNaN(val)) return val;
+      // If value's sign matches dominant, keep it. Otherwise, flip.
+      const valSign = val >= 0 ? 1 : -1;
+      return valSign === dominantSign ? val : -val;
+    });
+  });
+}
+
+/**
+ * Apply absolute value transformation to data
+ */
+function applyAbsoluteValue(data: number[][]): number[][] {
+  return data.map(row => row.map(val => isNaN(val) ? val : Math.abs(val)));
+}
+
+export function ResultPanel({ outlierResult, statsResults, data }: Props) {
+  const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>('none');
+
   const handleExportCSV = () => {
     if (!statsResults) return;
 
@@ -30,6 +130,52 @@ export function ResultPanel({ outlierResult, statsResults }: Props) {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Transform data based on normalize mode
+  const transformedData = useMemo(() => {
+    if (!data?.data) return null;
+
+    switch (normalizeMode) {
+      case 'sign':
+        return applySignNormalization(data.data);
+      case 'absolute':
+        return applyAbsoluteValue(data.data);
+      default:
+        return data.data;
+    }
+  }, [data, normalizeMode]);
+
+  // Prepare data for chart: x-axis = row index, each line = column (sample)
+  const chartData = useMemo(() => {
+    if (!transformedData || transformedData.length === 0) return [];
+
+    const rowIds = data?.rowIds || transformedData.map((_, i) => `Row ${i + 1}`);
+
+    return transformedData.map((row, rowIndex) => {
+      const point: Record<string, string | number> = {
+        index: rowIndex,
+        rowId: rowIds[rowIndex]
+      };
+      row.forEach((val, colIndex) => {
+        const colName = data?.headers?.[colIndex] || `Sample ${colIndex + 1}`;
+        point[colName] = isNaN(val) ? 0 : val;
+      });
+      return point;
+    });
+  }, [transformedData, data]);
+
+  // Get column names for chart lines
+  const columnNames = useMemo(() => {
+    if (!data?.data || data.data.length === 0) return [];
+    const numCols = data.data[0].length;
+    return Array.from({ length: numCols }, (_, i) =>
+      data.headers?.[i] || `Sample ${i + 1}`
+    );
+  }, [data]);
+
+  const handleNormalizeModeChange = useCallback((mode: NormalizeMode) => {
+    setNormalizeMode(mode);
+  }, []);
 
   const significantCount = statsResults?.filter(r => r.isSignificant).length || 0;
 
@@ -69,6 +215,101 @@ export function ResultPanel({ outlierResult, statsResults }: Props) {
           </>
         )}
       </div>
+
+      {/* Interactive Line Chart */}
+      {data && chartData.length > 0 && (
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-medium text-slate-900">Data Visualization</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleNormalizeModeChange('none')}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                  normalizeMode === 'none'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                Original
+              </button>
+              <button
+                onClick={() => handleNormalizeModeChange('sign')}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                  normalizeMode === 'sign'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                Sign Normalize
+              </button>
+              <button
+                onClick={() => handleNormalizeModeChange('absolute')}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                  normalizeMode === 'absolute'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                Absolute Value
+              </button>
+            </div>
+          </div>
+
+          {normalizeMode !== 'none' && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+              {normalizeMode === 'sign' ? (
+                <>
+                  <strong>Sign Normalize:</strong> Each row's values are normalized to the dominant sign
+                  (positive or negative majority). If equal, follows previous row's sign (first row follows next row).
+                </>
+              ) : (
+                <>
+                  <strong>Absolute Value:</strong> All values converted to their absolute values.
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="h-96">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis
+                  dataKey="index"
+                  tick={{ fontSize: 12 }}
+                  label={{ value: 'Row Index', position: 'insideBottom', offset: -5 }}
+                />
+                <YAxis
+                  tick={{ fontSize: 12 }}
+                  label={{ value: 'Value', angle: -90, position: 'insideLeft' }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'white',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '12px'
+                  }}
+                  formatter={(value: number) => [value.toFixed(4), '']}
+                  labelFormatter={(label) => `Row ${label} (${chartData[label as number]?.rowId || ''})`}
+                />
+                <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                {columnNames.map((colName, idx) => (
+                  <Line
+                    key={colName}
+                    type="monotone"
+                    dataKey={colName}
+                    stroke={COLORS[idx % COLORS.length]}
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {statsResults && (
         <div className="bg-white rounded-lg border border-slate-200 p-4">
@@ -124,7 +365,7 @@ export function ResultPanel({ outlierResult, statsResults }: Props) {
                     </td>
                     <td className="px-3 py-2 text-center">
                       {r.isSignificant ? (
-                        <span className="text-green-600 font-medium">✓</span>
+                        <span className="text-green-600 font-medium">O</span>
                       ) : (
                         <span className="text-slate-400">-</span>
                       )}
@@ -137,7 +378,7 @@ export function ResultPanel({ outlierResult, statsResults }: Props) {
         </div>
       )}
 
-      {!outlierResult && !statsResults && (
+      {!outlierResult && !statsResults && !data && (
         <div className="text-center py-12 text-slate-500">
           No results yet. Run outlier detection or statistical analysis first.
         </div>
