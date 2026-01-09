@@ -18,8 +18,17 @@ import { percentile, median as calcMedian } from '../lib/utils/math';
 
 // Custom BoxPlot rendering component using Customized
 interface BoxPlotCustomizedProps {
-  xAxisMap?: Record<string, { scale: (value: string) => number; bandwidth?: () => number }>;
-  yAxisMap?: Record<string, { scale: (value: number) => number }>;
+  xAxisMap?: Record<string, {
+    scale: (value: string) => number | undefined;
+    bandwidth?: number | (() => number);
+    width?: number;
+  }>;
+  yAxisMap?: Record<string, { scale: (value: number) => number | undefined }>;
+  formattedGraphicalItems?: Array<{
+    props?: {
+      data?: Array<{ x?: number; width?: number }>;
+    };
+  }>;
   data?: Array<{
     name: string;
     q1: number;
@@ -28,20 +37,40 @@ interface BoxPlotCustomizedProps {
     lowerWhisker: number;
     upperWhisker: number;
   }>;
+  offset?: { left: number; top: number; width: number; height: number };
 }
 
 const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
-  const { xAxisMap, yAxisMap, data } = props;
+  const { xAxisMap, yAxisMap, data, formattedGraphicalItems, offset } = props;
 
-  if (!xAxisMap || !yAxisMap || !data) return null;
+  if (!xAxisMap || !yAxisMap || !data || data.length === 0) return null;
 
-  const xScale = xAxisMap['0']?.scale;
-  const yScale = yAxisMap['0']?.scale;
-  const bandwidth = xAxisMap['0']?.bandwidth;
+  const xAxis = xAxisMap['0'] || Object.values(xAxisMap)[0];
+  const yAxis = yAxisMap['0'] || Object.values(yAxisMap)[0];
 
-  if (!xScale || !yScale || !bandwidth) return null;
+  if (!xAxis?.scale || !yAxis?.scale) return null;
 
-  const barWidth = bandwidth();
+  const xScale = xAxis.scale;
+  const yScale = yAxis.scale;
+
+  // Get bandwidth from various sources
+  let barWidth: number;
+
+  // Try to get bandwidth from xAxis
+  if (typeof xAxis.bandwidth === 'function') {
+    barWidth = xAxis.bandwidth();
+  } else if (typeof xAxis.bandwidth === 'number') {
+    barWidth = xAxis.bandwidth;
+  } else if (formattedGraphicalItems?.[0]?.props?.data?.[0]?.width) {
+    // Try to get from formatted items (Bar component)
+    barWidth = formattedGraphicalItems[0].props.data[0].width;
+  } else if (offset && data.length > 0) {
+    // Calculate from offset and data count
+    barWidth = (offset.width * 0.8) / data.length;
+  } else {
+    // Fallback to reasonable default
+    barWidth = 40;
+  }
 
   return (
     <g className="recharts-boxplot-layer">
@@ -50,14 +79,31 @@ const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
 
         // Get x position for this category
         const xPos = xScale(name);
-        if (xPos === undefined) return null;
+        if (xPos === undefined || xPos === null) return null;
 
         // Convert data values to pixel coordinates
-        const yQ1 = yScale(q1);
-        const yQ3 = yScale(q3);
-        const yMedian = yScale(median);
-        const yLower = yScale(lowerWhisker);
-        const yUpper = yScale(upperWhisker);
+        const yQ1Raw = yScale(q1);
+        const yQ3Raw = yScale(q3);
+        const yMedianRaw = yScale(median);
+        const yLowerRaw = yScale(lowerWhisker);
+        const yUpperRaw = yScale(upperWhisker);
+
+        // Validate all y coordinates
+        if (
+          yQ1Raw === undefined || yQ1Raw === null || isNaN(yQ1Raw) ||
+          yQ3Raw === undefined || yQ3Raw === null || isNaN(yQ3Raw) ||
+          yMedianRaw === undefined || yMedianRaw === null || isNaN(yMedianRaw) ||
+          yLowerRaw === undefined || yLowerRaw === null || isNaN(yLowerRaw) ||
+          yUpperRaw === undefined || yUpperRaw === null || isNaN(yUpperRaw)
+        ) {
+          return null;
+        }
+
+        const yQ1 = yQ1Raw;
+        const yQ3 = yQ3Raw;
+        const yMedian = yMedianRaw;
+        const yLower = yLowerRaw;
+        const yUpper = yUpperRaw;
 
         const boxWidth = barWidth * 0.5;
         const xCenter = xPos + barWidth / 2;
@@ -107,7 +153,7 @@ const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
               x={xLeft}
               y={Math.min(yQ1, yQ3)}
               width={boxWidth}
-              height={Math.abs(yQ3 - yQ1)}
+              height={Math.abs(yQ3 - yQ1) || 1}
               fill="#60a5fa"
               stroke="#3b82f6"
               strokeWidth={1.5}
@@ -169,13 +215,13 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     };
   }, [data]);
 
-  // Box plot data for each column
+  // Box plot data for each row (outlier detection is per-row)
   const boxPlotData = useMemo(() => {
     if (!data.data || data.data.length === 0) return [];
 
-    const numCols = data.data[0]?.length || 0;
     const chartData: Array<{
       name: string;
+      rowIndex: number;
       min: number;
       q1: number;
       median: number;
@@ -187,14 +233,14 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       boxSize: number;
       lowerMid: number;
       upperMid: number;
-      outliers: Array<{ x: string; y: number }>;
+      outliers: Array<{ x: string; y: number; colIndex: number }>;
     }> = [];
 
-    for (let col = 0; col < numCols; col++) {
-      const colData = data.data.map(row => row[col]).filter(x => !isNaN(x));
-      if (colData.length === 0) continue;
+    for (let row = 0; row < data.data.length; row++) {
+      const rowData = data.data[row].filter(x => !isNaN(x));
+      if (rowData.length === 0) continue;
 
-      const sorted = [...colData].sort((a, b) => a - b);
+      const sorted = [...rowData].sort((a, b) => a - b);
       const q1 = percentile(sorted, 0.25);
       const q3 = percentile(sorted, 0.75);
       const med = calcMedian(sorted);
@@ -205,18 +251,28 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       const upperBound = q3 + 1.5 * iqr;
 
       // Find actual whisker values (min/max within bounds)
-      const lowerWhisker = Math.min(...sorted.filter(v => v >= lowerBound));
-      const upperWhisker = Math.max(...sorted.filter(v => v <= upperBound));
+      const withinLower = sorted.filter(v => v >= lowerBound);
+      const withinUpper = sorted.filter(v => v <= upperBound);
+      const lowerWhisker = withinLower.length > 0 ? Math.min(...withinLower) : q1;
+      const upperWhisker = withinUpper.length > 0 ? Math.max(...withinUpper) : q3;
 
-      // Find outliers
-      const outliers = sorted
-        .filter(v => v < lowerBound || v > upperBound)
-        .map(v => ({ x: data.headers?.[col] || `Col ${col + 1}`, y: v }));
+      // Find outliers for this row
+      const outliers: Array<{ x: string; y: number; colIndex: number }> = [];
+      data.data[row].forEach((val, colIndex) => {
+        if (!isNaN(val) && (val < lowerBound || val > upperBound)) {
+          outliers.push({
+            x: data.rowIds?.[row] || `Row ${row + 1}`,
+            y: val,
+            colIndex
+          });
+        }
+      });
 
-      const name = data.headers?.[col] || `Col ${col + 1}`;
+      const name = data.rowIds?.[row] || `Row ${row + 1}`;
 
       chartData.push({
         name,
+        rowIndex: row,
         min: Math.min(...sorted),
         q1,
         median: med,
@@ -236,14 +292,15 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return chartData;
   }, [data]);
 
-  // Get all outliers for scatter plot
+  // Get all outliers for scatter plot (per-row detection)
   const scatterOutliers = useMemo(() => {
     if (!result) return [];
     return result.outlierIndices.map(([row, col]) => ({
-      x: data.headers?.[col] || `Col ${col + 1}`,
+      x: data.rowIds?.[row] || `Row ${row + 1}`,
       y: data.data[row][col],
-      row: data.rowIds?.[row] || `Row ${row + 1}`,
-      col: col
+      rowIndex: row,
+      colIndex: col,
+      colName: data.headers?.[col] || `Col ${col + 1}`
     }));
   }, [result, data]);
 
@@ -438,7 +495,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   dataKey="name"
                   tick={{ fontSize: 11 }}
                   label={{
-                    value: 'Column',
+                    value: 'Row',
                     position: 'insideBottom',
                     offset: -10,
                     style: { fontSize: 12, fill: '#64748b' }
