@@ -1,12 +1,19 @@
 import { useState, useMemo } from 'react';
 import { detectOutliers } from '../lib/outlier';
-import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult } from '../types';
+import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult, NormalizeMode } from '../types';
 
 interface Props {
   data: DataMatrix;
   onDetect: (result: OutlierResult) => void;
   result: OutlierResult | null;
+  normalizeMode: NormalizeMode;
 }
+
+const NORMALIZE_LABELS: Record<NormalizeMode, string> = {
+  'none': 'Original',
+  'sign': 'Sign Normalized',
+  'absolute': 'Absolute Value'
+};
 
 const METHODS: { value: OutlierMethod; label: string; desc: string }[] = [
   { value: 'zscore', label: 'Z-Score', desc: 'Standard deviation based' },
@@ -14,7 +21,7 @@ const METHODS: { value: OutlierMethod; label: string; desc: string }[] = [
   { value: 'mad', label: 'Modified Z-Score', desc: 'Median absolute deviation based' },
 ];
 
-export function OutlierPanel({ data, onDetect, result }: Props) {
+export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   const [config, setConfig] = useState<OutlierConfig>({
     method: 'iqr',
     multiplier: 1.5,
@@ -40,7 +47,7 @@ export function OutlierPanel({ data, onDetect, result }: Props) {
     <div className="space-y-6">
       <div className="bg-white rounded-lg border border-slate-200 p-4">
         <h3 className="font-medium text-slate-900 mb-3">Data Summary</h3>
-        <div className="grid grid-cols-4 gap-4 text-center">
+        <div className="grid grid-cols-5 gap-4 text-center">
           <div>
             <div className="text-2xl font-semibold text-slate-900">{summary.rows}</div>
             <div className="text-sm text-slate-500">Rows</div>
@@ -56,6 +63,12 @@ export function OutlierPanel({ data, onDetect, result }: Props) {
           <div>
             <div className="text-2xl font-semibold text-amber-600">{summary.nanCount}</div>
             <div className="text-sm text-slate-500">Missing</div>
+          </div>
+          <div>
+            <div className={`text-lg font-semibold ${normalizeMode !== 'none' ? 'text-blue-600' : 'text-slate-500'}`}>
+              {NORMALIZE_LABELS[normalizeMode]}
+            </div>
+            <div className="text-sm text-slate-500">Data Mode</div>
           </div>
         </div>
       </div>

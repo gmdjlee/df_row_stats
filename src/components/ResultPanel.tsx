@@ -9,15 +9,14 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
-import { OutlierResult, StatsResult, DataMatrix } from '../types';
+import { OutlierResult, StatsResult, DataMatrix, NormalizeMode } from '../types';
 
 interface Props {
   outlierResult: OutlierResult | null;
   statsResults: StatsResult[] | null;
   data: DataMatrix | null;
+  normalizeMode: NormalizeMode;
 }
-
-type NormalizeMode = 'none' | 'sign' | 'absolute';
 
 // Color palette for chart lines
 const COLORS = [
@@ -25,86 +24,15 @@ const COLORS = [
   '#0891b2', '#c026d3', '#ea580c', '#4f46e5', '#059669'
 ];
 
-/**
- * Determine the dominant sign for each row
- * Returns an array of 1 (positive dominant) or -1 (negative dominant)
- */
-function determineDominantSigns(data: number[][]): number[] {
-  const signs: number[] = [];
+const NORMALIZE_LABELS: Record<NormalizeMode, string> = {
+  'none': 'Original',
+  'sign': 'Sign Normalized',
+  'absolute': 'Absolute Value'
+};
 
-  // First pass: determine signs based on count majority
-  for (let i = 0; i < data.length; i++) {
-    const row = data[i];
-    let positiveCount = 0;
-    let negativeCount = 0;
-
-    for (const val of row) {
-      if (!isNaN(val)) {
-        if (val > 0) positiveCount++;
-        else if (val < 0) negativeCount++;
-      }
-    }
-
-    if (positiveCount > negativeCount) {
-      signs.push(1);
-    } else if (negativeCount > positiveCount) {
-      signs.push(-1);
-    } else {
-      // Equal count - will be resolved in second pass
-      signs.push(0);
-    }
-  }
-
-  // Second pass: resolve ties by looking at neighbors
-  for (let i = 0; i < signs.length; i++) {
-    if (signs[i] === 0) {
-      if (i === 0) {
-        // First row: look at next row
-        for (let j = 1; j < signs.length; j++) {
-          if (signs[j] !== 0) {
-            signs[i] = signs[j];
-            break;
-          }
-        }
-        // If all are ties, default to positive
-        if (signs[i] === 0) signs[i] = 1;
-      } else {
-        // Other rows: use previous row's sign
-        signs[i] = signs[i - 1];
-      }
-    }
-  }
-
-  return signs;
-}
-
-/**
- * Apply sign normalization to data
- * Flips signs so all values match the dominant sign of their row
- */
-function applySignNormalization(data: number[][]): number[][] {
-  const dominantSigns = determineDominantSigns(data);
-
-  return data.map((row, i) => {
-    const dominantSign = dominantSigns[i];
-    return row.map(val => {
-      if (isNaN(val)) return val;
-      // If value's sign matches dominant, keep it. Otherwise, flip.
-      const valSign = val >= 0 ? 1 : -1;
-      return valSign === dominantSign ? val : -val;
-    });
-  });
-}
-
-/**
- * Apply absolute value transformation to data
- */
-function applyAbsoluteValue(data: number[][]): number[][] {
-  return data.map(row => row.map(val => isNaN(val) ? val : Math.abs(val)));
-}
-
-export function ResultPanel({ outlierResult, statsResults, data }: Props) {
-  const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>('none');
+export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }: Props) {
+  // Track which lines are visible (all visible by default)
+  const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set());
 
   const handleExportCSV = () => {
     if (!statsResults) return;
@@ -131,38 +59,24 @@ export function ResultPanel({ outlierResult, statsResults, data }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  // Transform data based on normalize mode
-  const transformedData = useMemo(() => {
-    if (!data?.data) return null;
-
-    switch (normalizeMode) {
-      case 'sign':
-        return applySignNormalization(data.data);
-      case 'absolute':
-        return applyAbsoluteValue(data.data);
-      default:
-        return data.data;
-    }
-  }, [data, normalizeMode]);
-
   // Prepare data for chart: x-axis = row index, each line = column (sample)
   const chartData = useMemo(() => {
-    if (!transformedData || transformedData.length === 0) return [];
+    if (!data?.data || data.data.length === 0) return [];
 
-    const rowIds = data?.rowIds || transformedData.map((_, i) => `Row ${i + 1}`);
+    const rowIds = data.rowIds || data.data.map((_, i) => `Row ${i + 1}`);
 
-    return transformedData.map((row, rowIndex) => {
+    return data.data.map((row, rowIndex) => {
       const point: Record<string, string | number> = {
         index: rowIndex,
         rowId: rowIds[rowIndex]
       };
       row.forEach((val, colIndex) => {
-        const colName = data?.headers?.[colIndex] || `Sample ${colIndex + 1}`;
+        const colName = data.headers?.[colIndex] || `Sample ${colIndex + 1}`;
         point[colName] = isNaN(val) ? 0 : val;
       });
       return point;
     });
-  }, [transformedData, data]);
+  }, [data]);
 
   // Get column names for chart lines
   const columnNames = useMemo(() => {
@@ -173,11 +87,81 @@ export function ResultPanel({ outlierResult, statsResults, data }: Props) {
     );
   }, [data]);
 
-  const handleNormalizeModeChange = useCallback((mode: NormalizeMode) => {
-    setNormalizeMode(mode);
+  // Toggle line visibility
+  const handleLegendClick = useCallback((dataKey: string) => {
+    setHiddenLines(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(dataKey)) {
+        newSet.delete(dataKey);
+      } else {
+        newSet.add(dataKey);
+      }
+      return newSet;
+    });
   }, []);
 
+  // Show/Hide all lines
+  const handleShowAll = useCallback(() => {
+    setHiddenLines(new Set());
+  }, []);
+
+  const handleHideAll = useCallback(() => {
+    setHiddenLines(new Set(columnNames));
+  }, [columnNames]);
+
+  // Custom legend with click handler
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const renderLegend = useCallback((props: any) => {
+    const { payload } = props;
+    if (!payload) return null;
+
+    return (
+      <div className="flex flex-wrap justify-center gap-2 pt-4">
+        {payload.map((entry: { value: string; color?: string }, index: number) => {
+          const value = entry.value;
+          const color = entry.color || '#000';
+          const isHidden = hiddenLines.has(value);
+          return (
+            <button
+              key={`legend-${index}`}
+              onClick={() => handleLegendClick(value)}
+              className={`
+                flex items-center gap-1.5 px-2 py-1 rounded text-xs
+                transition-all cursor-pointer
+                ${isHidden
+                  ? 'bg-slate-100 text-slate-400 line-through'
+                  : 'bg-slate-50 hover:bg-slate-100'}
+              `}
+            >
+              <span
+                className={`w-3 h-3 rounded-full ${isHidden ? 'opacity-30' : ''}`}
+                style={{ backgroundColor: color }}
+              />
+              {value}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }, [hiddenLines, handleLegendClick]);
+
+  // Determine axis labels based on data
+  const xAxisLabel = useMemo(() => {
+    if (data?.rowIds && data.rowIds.length > 0) {
+      return 'Row ID';
+    }
+    return 'Row Index';
+  }, [data]);
+
+  const yAxisLabel = useMemo(() => {
+    if (data?.headers && data.headers.length > 0) {
+      return 'Sample Value';
+    }
+    return 'Value';
+  }, [data]);
+
   const significantCount = statsResults?.filter(r => r.isSignificant).length || 0;
+  const visibleLineCount = columnNames.length - hiddenLines.size;
 
   return (
     <div className="space-y-6">
@@ -220,68 +204,64 @@ export function ResultPanel({ outlierResult, statsResults, data }: Props) {
       {data && chartData.length > 0 && (
         <div className="bg-white rounded-lg border border-slate-200 p-4">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="font-medium text-slate-900">Data Visualization</h3>
+            <div>
+              <h3 className="font-medium text-slate-900">Data Visualization</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Data Mode: <span className={normalizeMode !== 'none' ? 'text-blue-600 font-medium' : ''}>
+                  {NORMALIZE_LABELS[normalizeMode]}
+                </span>
+              </p>
+            </div>
             <div className="flex gap-2">
               <button
-                onClick={() => handleNormalizeModeChange('none')}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                  normalizeMode === 'none'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
+                onClick={handleShowAll}
+                disabled={hiddenLines.size === 0}
+                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 text-slate-700
+                  hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Original
+                Show All
               </button>
               <button
-                onClick={() => handleNormalizeModeChange('sign')}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                  normalizeMode === 'sign'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
+                onClick={handleHideAll}
+                disabled={hiddenLines.size === columnNames.length}
+                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 text-slate-700
+                  hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Sign Normalize
-              </button>
-              <button
-                onClick={() => handleNormalizeModeChange('absolute')}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                  normalizeMode === 'absolute'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                Absolute Value
+                Hide All
               </button>
             </div>
           </div>
 
-          {normalizeMode !== 'none' && (
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-              {normalizeMode === 'sign' ? (
-                <>
-                  <strong>Sign Normalize:</strong> Each row's values are normalized to the dominant sign
-                  (positive or negative majority). If equal, follows previous row's sign (first row follows next row).
-                </>
-              ) : (
-                <>
-                  <strong>Absolute Value:</strong> All values converted to their absolute values.
-                </>
-              )}
-            </div>
-          )}
+          <div className="mb-2 text-sm text-slate-600">
+            Showing {visibleLineCount} of {columnNames.length} samples
+            {hiddenLines.size > 0 && ' (click legend items to toggle)'}
+          </div>
 
           <div className="h-96">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+              <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
-                  dataKey="index"
-                  tick={{ fontSize: 12 }}
-                  label={{ value: 'Row Index', position: 'insideBottom', offset: -5 }}
+                  dataKey={data.rowIds ? 'rowId' : 'index'}
+                  tick={{ fontSize: 11 }}
+                  label={{
+                    value: xAxisLabel,
+                    position: 'insideBottom',
+                    offset: -15,
+                    style: { fontSize: 12, fill: '#64748b' }
+                  }}
+                  angle={data.rowIds && data.rowIds.some(id => id.length > 5) ? -45 : 0}
+                  textAnchor={data.rowIds && data.rowIds.some(id => id.length > 5) ? 'end' : 'middle'}
+                  height={data.rowIds && data.rowIds.some(id => id.length > 5) ? 60 : 30}
                 />
                 <YAxis
                   tick={{ fontSize: 12 }}
-                  label={{ value: 'Value', angle: -90, position: 'insideLeft' }}
+                  label={{
+                    value: yAxisLabel,
+                    angle: -90,
+                    position: 'insideLeft',
+                    style: { fontSize: 12, fill: '#64748b' }
+                  }}
                 />
                 <Tooltip
                   contentStyle={{
@@ -290,10 +270,16 @@ export function ResultPanel({ outlierResult, statsResults, data }: Props) {
                     borderRadius: '8px',
                     fontSize: '12px'
                   }}
-                  formatter={(value: number) => [value.toFixed(4), '']}
-                  labelFormatter={(label) => `Row ${label} (${chartData[label as number]?.rowId || ''})`}
+                  formatter={(value: number, name: string) => [value.toFixed(4), name]}
+                  labelFormatter={(label) => {
+                    if (data.rowIds) {
+                      return `Row: ${label}`;
+                    }
+                    const idx = label as number;
+                    return `Row ${idx + 1}${data.rowIds?.[idx] ? ` (${data.rowIds[idx]})` : ''}`;
+                  }}
                 />
-                <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                <Legend content={renderLegend} />
                 {columnNames.map((colName, idx) => (
                   <Line
                     key={colName}
@@ -303,6 +289,7 @@ export function ResultPanel({ outlierResult, statsResults, data }: Props) {
                     strokeWidth={2}
                     dot={{ r: 3 }}
                     activeDot={{ r: 5 }}
+                    hide={hiddenLines.has(colName)}
                   />
                 ))}
               </LineChart>

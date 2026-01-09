@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { DataInput } from './components/DataInput';
 import { OutlierPanel } from './components/OutlierPanel';
 import { StatsPanel } from './components/StatsPanel';
 import { ResultPanel } from './components/ResultPanel';
-import { DataMatrix, OutlierResult, StatsResult } from './types';
+import { DataMatrix, OutlierResult, StatsResult, NormalizeMode } from './types';
+import { applyNormalization } from './lib/utils/normalize';
 
 type Tab = 'input' | 'outlier' | 'stats' | 'results';
 
@@ -13,9 +14,29 @@ export default function App() {
   const [cleanedData, setCleanedData] = useState<DataMatrix | null>(null);
   const [outlierResult, setOutlierResult] = useState<OutlierResult | null>(null);
   const [statsResults, setStatsResults] = useState<StatsResult[] | null>(null);
+  const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>('none');
 
-  const handleDataLoad = useCallback((matrix: DataMatrix) => {
+  // Apply normalization to data when normalizeMode changes
+  const normalizedData = useMemo(() => {
+    if (!data) return null;
+    return {
+      ...data,
+      data: applyNormalization(data.data, normalizeMode)
+    };
+  }, [data, normalizeMode]);
+
+  // Apply normalization to cleaned data
+  const normalizedCleanedData = useMemo(() => {
+    if (!cleanedData) return null;
+    return {
+      ...cleanedData,
+      data: applyNormalization(cleanedData.data, normalizeMode)
+    };
+  }, [cleanedData, normalizeMode]);
+
+  const handleDataLoad = useCallback((matrix: DataMatrix, mode: NormalizeMode) => {
     setData(matrix);
+    setNormalizeMode(mode);
     setCleanedData(null);
     setOutlierResult(null);
     setStatsResults(null);
@@ -76,24 +97,27 @@ export default function App() {
         {tab === 'input' && (
           <DataInput onLoad={handleDataLoad} />
         )}
-        {tab === 'outlier' && data && (
+        {tab === 'outlier' && normalizedData && (
           <OutlierPanel
-            data={data}
+            data={normalizedData}
             onDetect={handleOutlierDetect}
             result={outlierResult}
+            normalizeMode={normalizeMode}
           />
         )}
         {tab === 'stats' && (
           <StatsPanel
-            data={cleanedData || data}
+            data={normalizedCleanedData || normalizedData}
             onAnalyze={handleStatsAnalyze}
+            normalizeMode={normalizeMode}
           />
         )}
         {tab === 'results' && (
           <ResultPanel
             outlierResult={outlierResult}
             statsResults={statsResults}
-            data={cleanedData || data}
+            data={normalizedCleanedData || normalizedData}
+            normalizeMode={normalizeMode}
           />
         )}
       </main>

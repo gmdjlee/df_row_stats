@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { parseText, parseCSVFile, ParseConfig } from '../lib/utils/parser';
-import { DataMatrix } from '../types';
+import { applyNormalization } from '../lib/utils/normalize';
+import { DataMatrix, NormalizeMode } from '../types';
 
 interface Props {
-  onLoad: (data: DataMatrix) => void;
+  onLoad: (data: DataMatrix, normalizeMode: NormalizeMode) => void;
 }
 
 export function DataInput({ onLoad }: Props) {
@@ -16,6 +17,7 @@ export function DataInput({ onLoad }: Props) {
   });
   const [preview, setPreview] = useState<number[][] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>('none');
 
   const onDrop = useCallback(async (files: File[]) => {
     const file = files[0];
@@ -28,7 +30,7 @@ export function DataInput({ onLoad }: Props) {
         onLoad({
           data: result.data,
           headers: result.headers
-        });
+        }, normalizeMode);
       } else {
         const content = await file.text();
         setText(content);
@@ -37,7 +39,7 @@ export function DataInput({ onLoad }: Props) {
     } catch {
       setError('Failed to parse file');
     }
-  }, [onLoad]);
+  }, [onLoad, normalizeMode]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -66,11 +68,17 @@ export function DataInput({ onLoad }: Props) {
         data: result.data,
         headers: result.headers,
         rowIds: result.rowIds
-      });
+      }, normalizeMode);
     } catch {
       setError('Failed to load data');
     }
   };
+
+  // Apply normalization to preview data
+  const normalizedPreview = useMemo(() => {
+    if (!preview) return null;
+    return applyNormalization(preview, normalizeMode);
+  }, [preview, normalizeMode]);
 
   return (
     <div className="space-y-6">
@@ -105,7 +113,7 @@ export function DataInput({ onLoad }: Props) {
         />
       </div>
 
-      <div className="flex gap-6 items-center">
+      <div className="flex gap-6 items-center flex-wrap">
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -127,21 +135,73 @@ export function DataInput({ onLoad }: Props) {
         </label>
       </div>
 
+      <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+        <h3 className="text-sm font-medium text-slate-700 mb-3">
+          Sign Normalization Mode
+        </h3>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setNormalizeMode('none')}
+            className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+              normalizeMode === 'none'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+            }`}
+          >
+            Original
+          </button>
+          <button
+            onClick={() => setNormalizeMode('sign')}
+            className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+              normalizeMode === 'sign'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+            }`}
+          >
+            Sign Normalize
+          </button>
+          <button
+            onClick={() => setNormalizeMode('absolute')}
+            className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+              normalizeMode === 'absolute'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+            }`}
+          >
+            Absolute Value
+          </button>
+        </div>
+        {normalizeMode !== 'none' && (
+          <p className="mt-3 text-sm text-slate-600">
+            {normalizeMode === 'sign' ? (
+              <>
+                <strong>Sign Normalize:</strong> Each row's values are normalized to the dominant sign
+                (positive or negative majority). If equal, follows previous row's sign.
+              </>
+            ) : (
+              <>
+                <strong>Absolute Value:</strong> All values converted to their absolute values.
+              </>
+            )}
+          </p>
+        )}
+      </div>
+
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
           {error}
         </div>
       )}
 
-      {preview && (
+      {normalizedPreview && (
         <div>
           <h3 className="text-sm font-medium text-slate-700 mb-2">
-            Preview (first 5 rows):
+            Preview (first 5 rows){normalizeMode !== 'none' && ` - ${normalizeMode === 'sign' ? 'Sign Normalized' : 'Absolute Value'}`}:
           </h3>
           <div className="overflow-x-auto">
             <table className="min-w-full border border-slate-200 rounded">
               <tbody>
-                {preview.map((row, i) => (
+                {normalizedPreview.map((row, i) => (
                   <tr key={i} className={i % 2 ? 'bg-slate-50' : ''}>
                     {row.map((cell, j) => (
                       <td key={j} className="px-3 py-2 text-sm font-mono border-r last:border-r-0">
