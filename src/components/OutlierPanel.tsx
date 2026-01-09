@@ -7,14 +7,126 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
   Scatter,
   Cell,
-  Legend
+  Legend,
+  Customized
 } from 'recharts';
 import { detectOutliers } from '../lib/outlier';
 import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult, NormalizeMode } from '../types';
 import { percentile, median as calcMedian } from '../lib/utils/math';
+
+// Custom BoxPlot rendering component using Customized
+interface BoxPlotCustomizedProps {
+  xAxisMap?: Record<string, { scale: (value: string) => number; bandwidth?: () => number }>;
+  yAxisMap?: Record<string, { scale: (value: number) => number }>;
+  data?: Array<{
+    name: string;
+    q1: number;
+    q3: number;
+    median: number;
+    lowerWhisker: number;
+    upperWhisker: number;
+  }>;
+}
+
+const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
+  const { xAxisMap, yAxisMap, data } = props;
+
+  if (!xAxisMap || !yAxisMap || !data) return null;
+
+  const xScale = xAxisMap['0']?.scale;
+  const yScale = yAxisMap['0']?.scale;
+  const bandwidth = xAxisMap['0']?.bandwidth;
+
+  if (!xScale || !yScale || !bandwidth) return null;
+
+  const barWidth = bandwidth();
+
+  return (
+    <g className="recharts-boxplot-layer">
+      {data.map((item, index) => {
+        const { name, q1, q3, median, lowerWhisker, upperWhisker } = item;
+
+        // Get x position for this category
+        const xPos = xScale(name);
+        if (xPos === undefined) return null;
+
+        // Convert data values to pixel coordinates
+        const yQ1 = yScale(q1);
+        const yQ3 = yScale(q3);
+        const yMedian = yScale(median);
+        const yLower = yScale(lowerWhisker);
+        const yUpper = yScale(upperWhisker);
+
+        const boxWidth = barWidth * 0.5;
+        const xCenter = xPos + barWidth / 2;
+        const xLeft = xCenter - boxWidth / 2;
+        const whiskerWidth = boxWidth * 0.5;
+
+        return (
+          <g key={`boxplot-${index}`}>
+            {/* Lower Whisker Line (vertical) */}
+            <line
+              x1={xCenter}
+              y1={yQ1}
+              x2={xCenter}
+              y2={yLower}
+              stroke="#64748b"
+              strokeWidth={1.5}
+            />
+            {/* Lower Whisker Cap (horizontal) */}
+            <line
+              x1={xCenter - whiskerWidth / 2}
+              y1={yLower}
+              x2={xCenter + whiskerWidth / 2}
+              y2={yLower}
+              stroke="#64748b"
+              strokeWidth={2}
+            />
+            {/* Upper Whisker Line (vertical) */}
+            <line
+              x1={xCenter}
+              y1={yQ3}
+              x2={xCenter}
+              y2={yUpper}
+              stroke="#64748b"
+              strokeWidth={1.5}
+            />
+            {/* Upper Whisker Cap (horizontal) */}
+            <line
+              x1={xCenter - whiskerWidth / 2}
+              y1={yUpper}
+              x2={xCenter + whiskerWidth / 2}
+              y2={yUpper}
+              stroke="#64748b"
+              strokeWidth={2}
+            />
+            {/* IQR Box */}
+            <rect
+              x={xLeft}
+              y={Math.min(yQ1, yQ3)}
+              width={boxWidth}
+              height={Math.abs(yQ3 - yQ1)}
+              fill="#60a5fa"
+              stroke="#3b82f6"
+              strokeWidth={1.5}
+            />
+            {/* Median Line */}
+            <line
+              x1={xLeft}
+              y1={yMedian}
+              x2={xLeft + boxWidth}
+              y2={yMedian}
+              stroke="#1e40af"
+              strokeWidth={2.5}
+            />
+          </g>
+        );
+      })}
+    </g>
+  );
+};
 
 interface Props {
   data: DataMatrix;
@@ -134,6 +246,25 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       col: col
     }));
   }, [result, data]);
+
+  // Calculate Y axis domain to include all data points (whiskers + outliers)
+  const yDomain = useMemo((): [number | 'auto', number | 'auto'] => {
+    if (boxPlotData.length === 0) return ['auto', 'auto'];
+
+    let minVal = Math.min(...boxPlotData.map(d => d.lowerWhisker));
+    let maxVal = Math.max(...boxPlotData.map(d => d.upperWhisker));
+
+    // Include outliers in domain
+    if (scatterOutliers.length > 0) {
+      const outlierValues = scatterOutliers.map(o => o.y);
+      minVal = Math.min(minVal, ...outlierValues);
+      maxVal = Math.max(maxVal, ...outlierValues);
+    }
+
+    // Add 5% padding
+    const padding = (maxVal - minVal) * 0.05;
+    return [minVal - padding, maxVal + padding];
+  }, [boxPlotData, scatterOutliers]);
 
   return (
     <div className="space-y-6">
@@ -315,6 +446,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 />
                 <YAxis
                   tick={{ fontSize: 12 }}
+                  domain={yDomain}
                   label={{
                     value: 'Value',
                     angle: -90,
@@ -371,38 +503,21 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 <Legend
                   payload={[
                     { value: 'Q1 ~ Q3 (IQR)', type: 'rect' as const, color: '#60a5fa' },
-                    { value: 'Whiskers', type: 'line' as const, color: '#94a3b8' },
+                    { value: 'Whiskers', type: 'line' as const, color: '#64748b' },
                     { value: 'Median', type: 'line' as const, color: '#1e40af' },
                     ...(result && result.outlierCount > 0
                       ? [{ value: 'Outliers', type: 'circle' as const, color: '#dc2626' }]
                       : [])
                   ]}
                 />
-                {/* Lower Whisker Area (transparent to offset) */}
-                <Bar dataKey="boxStart" stackId="box" fill="transparent" />
-                {/* Box: Q1 to lower whisker */}
-                <Bar dataKey="lowerMid" stackId="box" fill="#93c5fd" />
-                {/* Box: Q1 to Q3 */}
-                <Bar dataKey={(d) => d.q3 - d.q1} stackId="box" fill="#60a5fa" name="IQR">
-                  {boxPlotData.map((_, index) => (
-                    <Cell key={`cell-${index}`} fill="#60a5fa" />
-                  ))}
-                </Bar>
-                {/* Box: Q3 to upper whisker */}
-                <Bar dataKey="upperMid" stackId="box" fill="#93c5fd" />
-                {/* Median Line - rendered as reference lines */}
-                {boxPlotData.map((d, idx) => (
-                  <ReferenceLine
-                    key={`median-${idx}`}
-                    y={d.median}
-                    stroke="#1e40af"
-                    strokeWidth={2}
-                    segment={[
-                      { x: d.name, y: d.median },
-                      { x: d.name, y: d.median }
-                    ]}
-                  />
-                ))}
+                {/* Hidden bar to establish the data domain and x-axis categories */}
+                <Bar dataKey="q3" fill="transparent" />
+                {/* Custom BoxPlot rendering */}
+                <Customized
+                  component={(props: BoxPlotCustomizedProps) => (
+                    <BoxPlotCustomized {...props} data={boxPlotData} />
+                  )}
+                />
                 {/* Outliers */}
                 {result && (
                   <Scatter
