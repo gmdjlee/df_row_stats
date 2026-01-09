@@ -34,15 +34,21 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
   // Track which lines are visible (all visible by default)
   const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set());
 
+  // Get all unique group names from results
+  const groupNames = useMemo(() => {
+    if (!statsResults || statsResults.length === 0) return [];
+    const firstResult = statsResults[0];
+    return Object.keys(firstResult.groupMeans).sort();
+  }, [statsResults]);
+
   const handleExportCSV = () => {
     if (!statsResults) return;
 
-    const headers = ['Row_ID', 'Group1_Mean', 'Group2_Mean', 'Test_Type',
-                     'Statistic', 'P_Value', 'Significant'];
+    // Dynamic headers based on group names
+    const headers = ['Row_ID', ...groupNames, 'Test_Type', 'Statistic', 'P_Value', 'Significant'];
     const rows = statsResults.map(r => [
       r.rowId,
-      r.groupMeans['Group1_Mean']?.toFixed(4) || '',
-      r.groupMeans['Group2_Mean']?.toFixed(4) || '',
+      ...groupNames.map(name => r.groupMeans[name]?.toFixed(4) || ''),
       r.testType,
       r.statistic.toFixed(4),
       r.pValue.toFixed(6),
@@ -301,7 +307,13 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
       {statsResults && (
         <div className="bg-white rounded-lg border border-slate-200 p-4">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="font-medium text-slate-900">Statistical Analysis Results</h3>
+            <div>
+              <h3 className="font-medium text-slate-900">Statistical Analysis Results</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                {groupNames.length} groups analyzed •
+                {statsResults[0]?.testType === 'ANOVA' ? ' One-way ANOVA' : ' T-test comparison'}
+              </p>
+            </div>
             <button
               onClick={handleExportCSV}
               className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg
@@ -315,8 +327,22 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-3 py-2 text-left">Row ID</th>
-                  <th className="px-3 py-2 text-right">Group 1 Mean</th>
-                  <th className="px-3 py-2 text-right">Group 2 Mean</th>
+                  {groupNames.map((name, idx) => (
+                    <th key={name} className="px-3 py-2 text-right">
+                      <span className={`inline-flex items-center gap-1`}>
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{
+                            backgroundColor: [
+                              '#3b82f6', '#ef4444', '#22c55e', '#a855f7',
+                              '#f97316', '#14b8a6', '#ec4899', '#6366f1'
+                            ][idx % 8]
+                          }}
+                        />
+                        {name.replace('_Mean', ' Mean')}
+                      </span>
+                    </th>
+                  ))}
                   <th className="px-3 py-2 text-center">Test</th>
                   <th className="px-3 py-2 text-right">Statistic</th>
                   <th className="px-3 py-2 text-right">P-Value</th>
@@ -333,22 +359,23 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
                     `}
                   >
                     <td className="px-3 py-2 font-medium">{r.rowId}</td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {r.groupMeans['Group1_Mean']?.toFixed(4) || 'N/A'}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {r.groupMeans['Group2_Mean']?.toFixed(4) || 'N/A'}
-                    </td>
+                    {groupNames.map(name => (
+                      <td key={name} className="px-3 py-2 text-right font-mono">
+                        {r.groupMeans[name] !== undefined
+                          ? r.groupMeans[name].toFixed(4)
+                          : 'N/A'}
+                      </td>
+                    ))}
                     <td className="px-3 py-2 text-center">
                       <span className="px-2 py-0.5 bg-slate-100 rounded text-xs">
                         {r.testType}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {r.statistic.toFixed(4)}
+                      {isNaN(r.statistic) ? 'N/A' : r.statistic.toFixed(4)}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {r.pValue < 0.001 ? '<0.001' : r.pValue.toFixed(4)}
+                      {isNaN(r.pValue) ? 'N/A' : (r.pValue < 0.001 ? '<0.001' : r.pValue.toFixed(4))}
                     </td>
                     <td className="px-3 py-2 text-center">
                       {r.isSignificant ? (
