@@ -3,10 +3,11 @@ import { DataInput } from './components/DataInput';
 import { OutlierPanel } from './components/OutlierPanel';
 import { StatsPanel } from './components/StatsPanel';
 import { ResultPanel } from './components/ResultPanel';
+import { ExplanationPanel } from './components/ExplanationPanel';
 import { DataMatrix, OutlierResult, StatsResult, NormalizeMode } from './types';
 import { applyNormalization } from './lib/utils/normalize';
 
-type Tab = 'input' | 'outlier' | 'stats' | 'results';
+type Tab = 'input' | 'outlier' | 'stats' | 'results' | 'explanation';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('input');
@@ -71,11 +72,11 @@ export default function App() {
 
       <nav className="bg-white border-b border-slate-200">
         <div className="flex gap-1 px-6">
-          {(['input', 'outlier', 'stats', 'results'] as Tab[]).map((t) => (
+          {(['input', 'outlier', 'stats', 'results', 'explanation'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              disabled={t !== 'input' && !data}
+              disabled={t !== 'input' && t !== 'explanation' && !data}
               className={`
                 px-4 py-3 text-sm font-medium capitalize
                 border-b-2 transition-colors
@@ -87,7 +88,8 @@ export default function App() {
             >
               {t === 'input' ? 'Data Input' :
                t === 'outlier' ? 'Outlier Detection' :
-               t === 'stats' ? 'Statistical Analysis' : 'Results'}
+               t === 'stats' ? 'Statistical Analysis' :
+               t === 'results' ? 'Results' : 'Guide'}
             </button>
           ))}
         </div>
@@ -119,6 +121,9 @@ export default function App() {
             data={normalizedCleanedData || normalizedData}
             normalizeMode={normalizeMode}
           />
+        )}
+        {tab === 'explanation' && (
+          <ExplanationPanel />
         )}
       </main>
     </div>
