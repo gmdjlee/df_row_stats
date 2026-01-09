@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react';
-import { DataMatrix, StatsResult, StatsConfig } from '../types';
+import { DataMatrix, StatsResult, StatsConfig, NormalizeMode } from '../types';
 import { analyzeRows } from '../lib/statistics';
 
 interface Props {
   data: DataMatrix | null;
   onAnalyze: (results: StatsResult[]) => void;
+  normalizeMode: NormalizeMode;
 }
 
 interface GroupRange {
@@ -12,7 +13,13 @@ interface GroupRange {
   end: number;
 }
 
-export function StatsPanel({ data, onAnalyze }: Props) {
+const NORMALIZE_LABELS: Record<NormalizeMode, string> = {
+  'none': 'Original',
+  'sign': 'Sign Normalized',
+  'absolute': 'Absolute Value'
+};
+
+export function StatsPanel({ data, onAnalyze, normalizeMode }: Props) {
   const [group1Range, setGroup1Range] = useState<GroupRange>({ start: 0, end: 2 });
   const [group2Range, setGroup2Range] = useState<GroupRange>({ start: 3, end: 4 });
   const [alpha, setAlpha] = useState(0.05);
@@ -66,7 +73,7 @@ export function StatsPanel({ data, onAnalyze }: Props) {
     <div className="space-y-6">
       <div className="bg-white rounded-lg border border-slate-200 p-4">
         <h3 className="font-medium text-slate-900 mb-3">Data Info</h3>
-        <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="grid grid-cols-3 gap-4 text-sm">
           <div>
             <span className="text-slate-500">Rows: </span>
             <span className="font-medium">{data.data.length}</span>
@@ -74,6 +81,12 @@ export function StatsPanel({ data, onAnalyze }: Props) {
           <div>
             <span className="text-slate-500">Columns: </span>
             <span className="font-medium">{numCols}</span>
+          </div>
+          <div>
+            <span className="text-slate-500">Data Mode: </span>
+            <span className={`font-medium ${normalizeMode !== 'none' ? 'text-blue-600' : ''}`}>
+              {NORMALIZE_LABELS[normalizeMode]}
+            </span>
           </div>
         </div>
       </div>

@@ -1,3 +1,6 @@
+// 데이터 정규화 모드
+export type NormalizeMode = 'none' | 'sign' | 'absolute';
+
 // 데이터 타입
 export interface DataMatrix {
   data: number[][];
