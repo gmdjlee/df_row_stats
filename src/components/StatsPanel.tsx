@@ -1,14 +1,23 @@
-import { useState } from 'react';
-import { DataMatrix, StatsResult } from '../types';
+import { useState, useMemo } from 'react';
+import { DataMatrix, StatsResult, StatsConfig } from '../types';
+import { analyzeRows } from '../lib/statistics';
 
 interface Props {
   data: DataMatrix | null;
   onAnalyze: (results: StatsResult[]) => void;
 }
 
+interface GroupRange {
+  start: number;
+  end: number;
+}
+
 export function StatsPanel({ data, onAnalyze }: Props) {
-  const [groupIndices, setGroupIndices] = useState<[number, number]>([0, 3]);
-  const [alpha] = useState(0.05);
+  const [group1Range, setGroup1Range] = useState<GroupRange>({ start: 0, end: 2 });
+  const [group2Range, setGroup2Range] = useState<GroupRange>({ start: 3, end: 4 });
+  const [alpha, setAlpha] = useState(0.05);
+
+  const numCols = useMemo(() => data?.data[0]?.length || 0, [data]);
 
   if (!data) {
     return (
@@ -19,57 +28,132 @@ export function StatsPanel({ data, onAnalyze }: Props) {
   }
 
   const handleAnalyze = () => {
-    // Simple mock implementation
-    const results: StatsResult[] = data.rowIds?.map((rowId) => ({
-      rowId,
-      groupMeans: {
-        Group1_Mean: 10.5,
-        Group2_Mean: 10.8
-      },
-      testType: 'T-test' as const,
-      statistic: 1.23,
-      pValue: 0.045,
-      isSignificant: true,
-      leveneP: 0.567,
-      equalVariance: true
-    })) || [];
+    if (!data || data.data.length === 0) return;
 
+    // 열 인덱스를 기반으로 그룹 데이터 생성
+    // dataframes: [group][row][col] 형식으로 변환
+    const group1Cols: number[] = [];
+    const group2Cols: number[] = [];
+
+    for (let col = group1Range.start; col <= group1Range.end && col < numCols; col++) {
+      group1Cols.push(col);
+    }
+    for (let col = group2Range.start; col <= group2Range.end && col < numCols; col++) {
+      group2Cols.push(col);
+    }
+
+    // 각 그룹의 데이터 추출 (행별로 해당 열의 값들)
+    const group1Data: number[][] = data.data.map(row =>
+      group1Cols.map(col => row[col])
+    );
+    const group2Data: number[][] = data.data.map(row =>
+      group2Cols.map(col => row[col])
+    );
+
+    const dataframes = [group1Data, group2Data];
+    const rowIds = data.rowIds || data.data.map((_, i) => `Row ${i + 1}`);
+
+    const config: StatsConfig = {
+      alpha,
+      minSamples: 2
+    };
+
+    const results = analyzeRows(dataframes, rowIds, config);
     onAnalyze(results);
   };
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <h3 className="font-medium text-slate-900 mb-3">Data Info</h3>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <span className="text-slate-500">Rows: </span>
+            <span className="font-medium">{data.data.length}</span>
+          </div>
+          <div>
+            <span className="text-slate-500">Columns: </span>
+            <span className="font-medium">{numCols}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-slate-200 p-4">
         <h3 className="font-medium text-slate-900 mb-3">Group Configuration</h3>
         <p className="text-sm text-slate-600 mb-4">
-          Define groups by column indices for statistical comparison
+          Define groups by column indices (0-based) for statistical comparison.
+          Each row will be analyzed independently.
         </p>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Group 1 (columns):
-            </label>
-            <input
-              type="text"
-              value={`${groupIndices[0]}-${groupIndices[1]}`}
-              onChange={(e) => {
-                const parts = e.target.value.split('-');
-                if (parts.length === 2) {
-                  const start = parseInt(parts[0]);
-                  const end = parseInt(parts[1]);
-                  if (!isNaN(start) && !isNaN(end)) {
-                    setGroupIndices([start, end]);
-                  }
-                }
-              }}
-              placeholder="0-3"
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Group 1 (columns {group1Range.start}-{group1Range.end})
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={group1Range.start}
+                  onChange={(e) => setGroup1Range({ ...group1Range, start: parseInt(e.target.value) || 0 })}
+                  min={0}
+                  max={numCols - 1}
+                  className="w-20 px-3 py-2 border border-slate-300 rounded-lg"
+                  placeholder="Start"
+                />
+                <span className="py-2">to</span>
+                <input
+                  type="number"
+                  value={group1Range.end}
+                  onChange={(e) => setGroup1Range({ ...group1Range, end: parseInt(e.target.value) || 0 })}
+                  min={0}
+                  max={numCols - 1}
+                  className="w-20 px-3 py-2 border border-slate-300 rounded-lg"
+                  placeholder="End"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Group 2 (columns {group2Range.start}-{group2Range.end})
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={group2Range.start}
+                  onChange={(e) => setGroup2Range({ ...group2Range, start: parseInt(e.target.value) || 0 })}
+                  min={0}
+                  max={numCols - 1}
+                  className="w-20 px-3 py-2 border border-slate-300 rounded-lg"
+                  placeholder="Start"
+                />
+                <span className="py-2">to</span>
+                <input
+                  type="number"
+                  value={group2Range.end}
+                  onChange={(e) => setGroup2Range({ ...group2Range, end: parseInt(e.target.value) || 0 })}
+                  min={0}
+                  max={numCols - 1}
+                  className="w-20 px-3 py-2 border border-slate-300 rounded-lg"
+                  placeholder="End"
+                />
+              </div>
+            </div>
           </div>
 
-          <div className="text-sm text-slate-500">
-            Significance level (α): {alpha}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Significance level (α)
+            </label>
+            <select
+              value={alpha}
+              onChange={(e) => setAlpha(parseFloat(e.target.value))}
+              className="px-3 py-2 border border-slate-300 rounded-lg"
+            >
+              <option value={0.01}>0.01</option>
+              <option value={0.05}>0.05</option>
+              <option value={0.10}>0.10</option>
+            </select>
           </div>
         </div>
 
@@ -82,11 +166,12 @@ export function StatsPanel({ data, onAnalyze }: Props) {
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 p-4">
-        <h3 className="font-medium text-slate-900 mb-2">Note</h3>
-        <p className="text-sm text-slate-600">
-          This is a simplified demonstration. For full row-by-row statistical analysis,
-          the groups should be properly configured based on your experimental design.
-        </p>
+        <h3 className="font-medium text-slate-900 mb-2">Analysis Info</h3>
+        <ul className="text-sm text-slate-600 space-y-1">
+          <li>• T-test (or Welch's T-test) is used for 2 groups</li>
+          <li>• Levene's test checks for equal variances</li>
+          <li>• Each row is analyzed independently</li>
+        </ul>
       </div>
     </div>
   );
