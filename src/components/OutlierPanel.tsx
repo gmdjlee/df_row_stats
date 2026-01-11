@@ -296,7 +296,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   const scatterOutliers = useMemo(() => {
     if (!result) return [];
     return result.outlierIndices.map(([row, col]) => ({
-      x: data.rowIds?.[row] || `Row ${row + 1}`,
+      name: data.rowIds?.[row] || `Row ${row + 1}`,
       y: data.data[row][col],
       rowIndex: row,
       colIndex: col,
@@ -576,10 +576,11 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   )}
                 />
                 {/* Outliers */}
-                {result && (
+                {result && scatterOutliers.length > 0 && (
                   <Scatter
                     name="Outliers"
                     data={scatterOutliers}
+                    dataKey="y"
                     fill="#dc2626"
                   >
                     {scatterOutliers.map((_, index) => (
