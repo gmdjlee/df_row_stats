@@ -3,6 +3,7 @@ import { levene } from './levene';
 import { anova } from './anova';
 import { StatsConfig, StatsResult, TestType } from '../../types';
 import { mean } from '../utils/math';
+import { statsLogger, logAnalysisSummary } from '../utils/logger';
 
 const DEFAULT_CONFIG: StatsConfig = {
   alpha: 0.05,
@@ -20,6 +21,10 @@ export function analyzeRows(
   const results: StatsResult[] = [];
   const numRows = dataframes[0].length;
   const numGroups = dataframes.length;
+
+  statsLogger.time('statistical-analysis');
+  statsLogger.info(`Starting statistical analysis: ${numRows} rows, ${numGroups} groups`);
+  statsLogger.debug('Config:', config);
 
   for (let i = 0; i < numRows; i++) {
     // 각 그룹의 i번째 행 데이터 추출
@@ -73,6 +78,9 @@ export function analyzeRows(
       equalVariance: equalVar
     });
   }
+
+  statsLogger.timeEnd('statistical-analysis');
+  logAnalysisSummary.stats(results);
 
   return results;
 }
