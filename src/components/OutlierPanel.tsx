@@ -237,11 +237,22 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   // Zoom state for drag selection (supports both X and Y axes)
   const [zoomYDomain, setZoomYDomain] = useState<{ min: number; max: number } | null>(null);
   const [zoomXIndices, setZoomXIndices] = useState<{ start: number; end: number } | null>(null);
-  const [dragStartY, setDragStartY] = useState<number | null>(null);
-  const [dragEndY, setDragEndY] = useState<number | null>(null);
-  const [dragStartX, setDragStartX] = useState<number | null>(null);
-  const [dragEndX, setDragEndX] = useState<number | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+
+  // Use refs for drag coordinates to avoid stale closure issues
+  const dragStartYRef = useRef<number | null>(null);
+  const dragEndYRef = useRef<number | null>(null);
+  const dragStartXRef = useRef<number | null>(null);
+  const dragEndXRef = useRef<number | null>(null);
+  const isDraggingRef = useRef(false);
+
+  // State for triggering re-renders during drag (selection rectangle)
+  const [dragState, setDragState] = useState<{
+    startX: number | null;
+    startY: number | null;
+    endX: number | null;
+    endY: number | null;
+    isDragging: boolean;
+  }>({ startX: null, startY: null, endX: null, endY: null, isDragging: false });
 
   // Ref to store current domain for event handlers
   const currentYDomainRef = useRef<[number, number]>([-10, 10]);
@@ -252,7 +263,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
   // Chart dimensions for coordinate conversion
   const chartMargin = { top: 20, right: 30, left: 60, bottom: 30 };
-  const chartHeight = 416; // 30% larger than original 320px
+  const chartHeight = 500; // 20% larger than previous 416px
 
   // Measure chart container width on mount and resize
   useEffect(() => {
@@ -299,75 +310,96 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
       if (inPlotArea) {
         const yValue = pixelYToValue(e.chartY);
-        setDragStartY(yValue);
-        setDragEndY(yValue);
-        setDragStartX(e.chartX);
-        setDragEndX(e.chartX);
-        setIsDragging(true);
+        // Store in refs for immediate access
+        dragStartYRef.current = yValue;
+        dragEndYRef.current = yValue;
+        dragStartXRef.current = e.chartX;
+        dragEndXRef.current = e.chartX;
+        isDraggingRef.current = true;
+        // Update state for re-render
+        setDragState({
+          startX: e.chartX,
+          startY: yValue,
+          endX: e.chartX,
+          endY: yValue,
+          isDragging: true
+        });
       }
     }
   }, [pixelYToValue, chartWidth, chartHeight, chartMargin.left, chartMargin.right, chartMargin.top, chartMargin.bottom]);
 
   const handleMouseMove = useCallback((e: { chartX?: number; chartY?: number }) => {
+    // Check ref for immediate isDragging status
+    if (!isDraggingRef.current) return;
+
     if (e.chartX !== undefined && e.chartY !== undefined &&
         e.chartX !== null && e.chartY !== null) {
       const yValue = pixelYToValue(e.chartY);
-      // Only update if we're dragging
-      setDragEndY(prev => prev !== null ? yValue : null);
-      setDragEndX(prev => prev !== null ? e.chartX! : null);
+      // Update refs
+      dragEndYRef.current = yValue;
+      dragEndXRef.current = e.chartX;
+      // Update state for re-render
+      setDragState(prev => ({
+        ...prev,
+        endX: e.chartX!,
+        endY: yValue
+      }));
     }
   }, [pixelYToValue]);
 
   const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-    setDragStartY(startY => {
-      setDragEndY(endY => {
-        setDragStartX(startX => {
-          setDragEndX(endX => {
-            if (startY !== null && endY !== null && startX !== null && endX !== null) {
-              const minY = Math.min(startY, endY);
-              const maxY = Math.max(startY, endY);
-              const yRange = maxY - minY;
-              const domain = currentYDomainRef.current;
-              const currentYRange = domain[1] - domain[0];
+    if (!isDraggingRef.current) return;
 
-              const xDiff = Math.abs(endX - startX);
+    const startY = dragStartYRef.current;
+    const endY = dragEndYRef.current;
+    const startX = dragStartXRef.current;
+    const endX = dragEndXRef.current;
 
-              // Apply zoom if selection is meaningful (at least 0.5% of range or 10px)
-              const shouldZoomY = yRange > currentYRange * 0.005;
-              const shouldZoomX = xDiff > 10;
+    if (startY !== null && endY !== null && startX !== null && endX !== null) {
+      const minY = Math.min(startY, endY);
+      const maxY = Math.max(startY, endY);
+      const yRange = maxY - minY;
+      const domain = currentYDomainRef.current;
+      const currentYRange = domain[1] - domain[0];
 
-              if (shouldZoomY || shouldZoomX) {
-                if (shouldZoomY) {
-                  setZoomYDomain({ min: minY, max: maxY });
-                }
-                if (shouldZoomX) {
-                  // Convert pixel X to row indices (approximate)
-                  setZoomXIndices({
-                    start: Math.min(startX, endX),
-                    end: Math.max(startX, endX)
-                  });
-                }
-              }
-            }
-            return null;
+      const xDiff = Math.abs(endX - startX);
+
+      // Apply zoom if selection is meaningful (at least 0.5% of range or 10px)
+      const shouldZoomY = yRange > currentYRange * 0.005;
+      const shouldZoomX = xDiff > 10;
+
+      if (shouldZoomY || shouldZoomX) {
+        if (shouldZoomY) {
+          setZoomYDomain({ min: minY, max: maxY });
+        }
+        if (shouldZoomX) {
+          // Convert pixel X to row indices (approximate)
+          setZoomXIndices({
+            start: Math.min(startX, endX),
+            end: Math.max(startX, endX)
           });
-          return null;
-        });
-        return null;
-      });
-      return null;
-    });
+        }
+      }
+    }
+
+    // Reset drag state
+    dragStartYRef.current = null;
+    dragEndYRef.current = null;
+    dragStartXRef.current = null;
+    dragEndXRef.current = null;
+    isDraggingRef.current = false;
+    setDragState({ startX: null, startY: null, endX: null, endY: null, isDragging: false });
   }, []);
 
   const handleZoomReset = useCallback(() => {
     setZoomYDomain(null);
     setZoomXIndices(null);
-    setDragStartY(null);
-    setDragEndY(null);
-    setDragStartX(null);
-    setDragEndX(null);
-    setIsDragging(false);
+    dragStartYRef.current = null;
+    dragEndYRef.current = null;
+    dragStartXRef.current = null;
+    dragEndXRef.current = null;
+    isDraggingRef.current = false;
+    setDragState({ startX: null, startY: null, endX: null, endY: null, isDragging: false });
   }, []);
 
   const summary = useMemo(() => {
@@ -786,8 +818,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
               )}
             </div>
           </div>
-          <div ref={chartContainerRef} className="h-[416px]">
-            <ResponsiveContainer width="100%" height="100%">
+          <div ref={chartContainerRef} className="h-[500px]">
+            <ResponsiveContainer width="100%" height={chartHeight}>
               <ComposedChart
                 data={filteredBoxPlotData}
                 margin={chartMargin}
@@ -928,16 +960,17 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   )}
                 />
                 {/* Selection rectangle during drag */}
-                {isDragging && dragStartY !== null && dragEndY !== null && dragStartX !== null && dragEndX !== null && (
+                {dragState.isDragging && dragState.startX !== null && dragState.startY !== null &&
+                 dragState.endX !== null && dragState.endY !== null && (
                   <Customized
                     component={() => {
-                      // dragStartX/dragEndX are chartX values which already include margin.left
-                      const x = Math.min(dragStartX, dragEndX);
-                      const width = Math.abs(dragEndX - dragStartX);
+                      // dragState.startX/endX are chartX values which already include margin.left
+                      const x = Math.min(dragState.startX!, dragState.endX!);
+                      const width = Math.abs(dragState.endX! - dragState.startX!);
                       const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
                       const domain = currentYDomainRef.current;
-                      const y1Ratio = (domain[1] - Math.max(dragStartY, dragEndY)) / (domain[1] - domain[0]);
-                      const y2Ratio = (domain[1] - Math.min(dragStartY, dragEndY)) / (domain[1] - domain[0]);
+                      const y1Ratio = (domain[1] - Math.max(dragState.startY!, dragState.endY!)) / (domain[1] - domain[0]);
+                      const y2Ratio = (domain[1] - Math.min(dragState.startY!, dragState.endY!)) / (domain[1] - domain[0]);
                       const y = chartMargin.top + y1Ratio * plotHeight;
                       const height = (y2Ratio - y1Ratio) * plotHeight;
 
