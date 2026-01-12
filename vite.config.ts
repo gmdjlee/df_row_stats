@@ -11,5 +11,16 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['react-dropzone', 'papaparse', 'jstat', 'lodash', 'recharts']
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-recharts': ['recharts'],
+          'vendor-utils': ['lodash', 'jstat', 'papaparse']
+        }
+      }
+    }
   }
 })
