@@ -8,8 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
-  Customized,
-  ReferenceArea
+  Customized
 } from 'recharts';
 import { detectOutliers } from '../lib/outlier';
 import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult, NormalizeMode } from '../types';
@@ -235,18 +234,21 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     threshold: 3.0
   });
 
-  // Zoom state for drag selection
-  const [zoomDomain, setZoomDomain] = useState<{ min: number; max: number } | null>(null);
+  // Zoom state for drag selection (supports both X and Y axes)
+  const [zoomYDomain, setZoomYDomain] = useState<{ min: number; max: number } | null>(null);
+  const [zoomXIndices, setZoomXIndices] = useState<{ start: number; end: number } | null>(null);
   const [dragStartY, setDragStartY] = useState<number | null>(null);
   const [dragEndY, setDragEndY] = useState<number | null>(null);
+  const [dragStartX, setDragStartX] = useState<number | null>(null);
+  const [dragEndX, setDragEndX] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Ref to store current domain for event handlers
-  const currentDomainRef = useRef<[number, number]>([-10, 10]);
+  const currentYDomainRef = useRef<[number, number]>([-10, 10]);
 
   // Chart dimensions for coordinate conversion
-  const chartMargin = { top: 20, right: 30, left: 20, bottom: 30 };
-  const chartHeight = 320; // h-80 = 20rem = 320px
+  const chartMargin = { top: 20, right: 30, left: 60, bottom: 30 };
+  const chartHeight = 416; // 30% larger than original 320px
 
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
@@ -254,47 +256,74 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   };
 
   // Convert pixel Y coordinate to data value
-  const pixelToValue = useCallback((chartY: number): number => {
+  const pixelYToValue = useCallback((chartY: number): number => {
     const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
-    const domain = currentDomainRef.current;
+    const domain = currentYDomainRef.current;
     // chartY is relative to chart area, Y axis is inverted (top = max, bottom = min)
     const ratio = chartY / plotHeight;
     return domain[1] - ratio * (domain[1] - domain[0]);
   }, [chartHeight, chartMargin.top, chartMargin.bottom]);
 
-  // Drag zoom handlers - using chartY coordinate
-  const handleMouseDown = useCallback((e: { chartY?: number }) => {
-    if (e.chartY !== undefined && e.chartY !== null && e.chartY >= 0) {
-      const yValue = pixelToValue(e.chartY);
+  // Drag zoom handlers - using chartX and chartY coordinates
+  const handleMouseDown = useCallback((e: { chartX?: number; chartY?: number }) => {
+    if (e.chartX !== undefined && e.chartY !== undefined &&
+        e.chartX !== null && e.chartY !== null &&
+        e.chartX >= 0 && e.chartY >= 0) {
+      const yValue = pixelYToValue(e.chartY);
       setDragStartY(yValue);
       setDragEndY(yValue);
+      setDragStartX(e.chartX);
+      setDragEndX(e.chartX);
       setIsDragging(true);
     }
-  }, [pixelToValue]);
+  }, [pixelYToValue]);
 
-  const handleMouseMove = useCallback((e: { chartY?: number }) => {
-    if (e.chartY !== undefined && e.chartY !== null) {
-      const yValue = pixelToValue(e.chartY);
-      // Only update if we're dragging (check the state directly might be stale)
+  const handleMouseMove = useCallback((e: { chartX?: number; chartY?: number }) => {
+    if (e.chartX !== undefined && e.chartY !== undefined &&
+        e.chartX !== null && e.chartY !== null) {
+      const yValue = pixelYToValue(e.chartY);
+      // Only update if we're dragging
       setDragEndY(prev => prev !== null ? yValue : null);
+      setDragEndX(prev => prev !== null ? e.chartX! : null);
     }
-  }, [pixelToValue]);
+  }, [pixelYToValue]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
-    setDragStartY(currentStart => {
-      setDragEndY(currentEnd => {
-        if (currentStart !== null && currentEnd !== null) {
-          const minY = Math.min(currentStart, currentEnd);
-          const maxY = Math.max(currentStart, currentEnd);
-          const range = maxY - minY;
-          const domain = currentDomainRef.current;
-          const currentRange = domain[1] - domain[0];
-          // Only zoom if selection is meaningful (at least 2% of current range)
-          if (range > currentRange * 0.02) {
-            setZoomDomain({ min: minY, max: maxY });
-          }
-        }
+    setDragStartY(startY => {
+      setDragEndY(endY => {
+        setDragStartX(startX => {
+          setDragEndX(endX => {
+            if (startY !== null && endY !== null && startX !== null && endX !== null) {
+              const minY = Math.min(startY, endY);
+              const maxY = Math.max(startY, endY);
+              const yRange = maxY - minY;
+              const domain = currentYDomainRef.current;
+              const currentYRange = domain[1] - domain[0];
+
+              const xDiff = Math.abs(endX - startX);
+
+              // Apply zoom if selection is meaningful (at least 0.5% of range or 10px)
+              const shouldZoomY = yRange > currentYRange * 0.005;
+              const shouldZoomX = xDiff > 10;
+
+              if (shouldZoomY || shouldZoomX) {
+                if (shouldZoomY) {
+                  setZoomYDomain({ min: minY, max: maxY });
+                }
+                if (shouldZoomX) {
+                  // Convert pixel X to row indices (approximate)
+                  setZoomXIndices({
+                    start: Math.min(startX, endX),
+                    end: Math.max(startX, endX)
+                  });
+                }
+              }
+            }
+            return null;
+          });
+          return null;
+        });
         return null;
       });
       return null;
@@ -302,9 +331,12 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   }, []);
 
   const handleZoomReset = useCallback(() => {
-    setZoomDomain(null);
+    setZoomYDomain(null);
+    setZoomXIndices(null);
     setDragStartY(null);
     setDragEndY(null);
+    setDragStartX(null);
+    setDragEndX(null);
     setIsDragging(false);
   }, []);
 
@@ -504,18 +536,38 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   // Apply zoom domain if set (from drag selection)
   const yDomain = useMemo((): [number, number] => {
     let domain: [number, number];
-    if (zoomDomain) {
+    if (zoomYDomain) {
       // Add small padding to zoomed area
-      const range = zoomDomain.max - zoomDomain.min;
+      const range = zoomYDomain.max - zoomYDomain.min;
       const padding = range * 0.05;
-      domain = [zoomDomain.min - padding, zoomDomain.max + padding];
+      domain = [zoomYDomain.min - padding, zoomYDomain.max + padding];
     } else {
       domain = baseDomain;
     }
     // Keep ref in sync for event handlers
-    currentDomainRef.current = domain;
+    currentYDomainRef.current = domain;
     return domain;
-  }, [baseDomain, zoomDomain]);
+  }, [baseDomain, zoomYDomain]);
+
+  // Filter boxPlotData based on X zoom (pixel-based filtering)
+  const filteredBoxPlotData = useMemo(() => {
+    if (!zoomXIndices || boxPlotData.length === 0) {
+      return boxPlotData;
+    }
+    // Calculate approximate bar width
+    const chartWidth = 800; // Approximate chart width
+    const plotWidth = chartWidth - chartMargin.left - chartMargin.right;
+    const barWidth = plotWidth / boxPlotData.length;
+
+    // Filter rows based on pixel position
+    return boxPlotData.filter((_, index) => {
+      const barCenter = index * barWidth + barWidth / 2;
+      return barCenter >= zoomXIndices.start && barCenter <= zoomXIndices.end;
+    });
+  }, [boxPlotData, zoomXIndices, chartMargin.left, chartMargin.right]);
+
+  // Check if zoomed
+  const isZoomed = zoomYDomain !== null || zoomXIndices !== null;
 
   return (
     <div className="space-y-6">
@@ -687,9 +739,11 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
             </h3>
             {/* Zoom Controls */}
             <div className="flex items-center gap-2">
-              {zoomDomain ? (
+              {isZoomed ? (
                 <>
-                  <span className="text-sm text-blue-600 font-medium">Zoomed</span>
+                  <span className="text-sm text-blue-600 font-medium">
+                    Zoomed {zoomXIndices ? '(X)' : ''}{zoomYDomain ? '(Y)' : ''}
+                  </span>
                   <button
                     onClick={handleZoomReset}
                     className="px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 text-blue-700 rounded border border-blue-300"
@@ -699,15 +753,15 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   </button>
                 </>
               ) : (
-                <span className="text-sm text-slate-500">Drag to zoom</span>
+                <span className="text-sm text-slate-500">Drag to zoom (X &amp; Y)</span>
               )}
             </div>
           </div>
-          <div className="h-80">
+          <div className="h-[416px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
-                data={boxPlotData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 30 }}
+                data={filteredBoxPlotData}
+                margin={chartMargin}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
@@ -719,7 +773,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   tick={{ fontSize: 11 }}
                   tickFormatter={(value) => {
                     // Find the displayName for this index
-                    const item = boxPlotData.find(d => d.name === value);
+                    const item = filteredBoxPlotData.find(d => d.name === value);
                     return item?.displayName || value;
                   }}
                   label={{
@@ -839,20 +893,37 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   component={(props: BoxPlotWithScatterProps) => (
                     <BoxPlotWithScatter
                       {...props}
-                      boxPlotData={boxPlotData}
+                      boxPlotData={filteredBoxPlotData}
                       scatterData={outlierDataByRow}
                     />
                   )}
                 />
                 {/* Selection rectangle during drag */}
-                {isDragging && dragStartY !== null && dragEndY !== null && (
-                  <ReferenceArea
-                    y1={dragStartY}
-                    y2={dragEndY}
-                    fill="#3b82f6"
-                    fillOpacity={0.3}
-                    stroke="#3b82f6"
-                    strokeWidth={2}
+                {isDragging && dragStartY !== null && dragEndY !== null && dragStartX !== null && dragEndX !== null && (
+                  <Customized
+                    component={() => {
+                      const x = Math.min(dragStartX, dragEndX) + chartMargin.left;
+                      const width = Math.abs(dragEndX - dragStartX);
+                      const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
+                      const domain = currentYDomainRef.current;
+                      const y1Ratio = (domain[1] - Math.max(dragStartY, dragEndY)) / (domain[1] - domain[0]);
+                      const y2Ratio = (domain[1] - Math.min(dragStartY, dragEndY)) / (domain[1] - domain[0]);
+                      const y = chartMargin.top + y1Ratio * plotHeight;
+                      const height = (y2Ratio - y1Ratio) * plotHeight;
+
+                      return (
+                        <rect
+                          x={x}
+                          y={y}
+                          width={Math.max(width, 2)}
+                          height={Math.max(height, 2)}
+                          fill="#3b82f6"
+                          fillOpacity={0.3}
+                          stroke="#3b82f6"
+                          strokeWidth={2}
+                        />
+                      );
+                    }}
                   />
                 )}
               </ComposedChart>
