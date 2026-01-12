@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   ComposedChart,
   Bar,
@@ -246,9 +246,26 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   // Ref to store current domain for event handlers
   const currentYDomainRef = useRef<[number, number]>([-10, 10]);
 
+  // Ref and state for measuring actual chart container width
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(800); // Default, will be updated on mount
+
   // Chart dimensions for coordinate conversion
   const chartMargin = { top: 20, right: 30, left: 60, bottom: 30 };
   const chartHeight = 416; // 30% larger than original 320px
+
+  // Measure chart container width on mount and resize
+  useEffect(() => {
+    const updateWidth = () => {
+      if (chartContainerRef.current) {
+        setChartWidth(chartContainerRef.current.clientWidth);
+      }
+    };
+
+    updateWidth();
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, []);
 
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
@@ -272,7 +289,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
         e.chartX !== null && e.chartY !== null) {
       // chartX and chartY are relative to SVG container (include margins)
       // Only start dragging if within the plot area
-      const plotWidth = 800 - chartMargin.left - chartMargin.right; // Approximate
+      const plotWidth = chartWidth - chartMargin.left - chartMargin.right;
       const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
       const inPlotArea =
         e.chartX >= chartMargin.left &&
@@ -289,7 +306,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
         setIsDragging(true);
       }
     }
-  }, [pixelYToValue, chartHeight, chartMargin.left, chartMargin.right, chartMargin.top, chartMargin.bottom]);
+  }, [pixelYToValue, chartWidth, chartHeight, chartMargin.left, chartMargin.right, chartMargin.top, chartMargin.bottom]);
 
   const handleMouseMove = useCallback((e: { chartX?: number; chartY?: number }) => {
     if (e.chartX !== undefined && e.chartY !== undefined &&
@@ -550,10 +567,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   const yDomain = useMemo((): [number, number] => {
     let domain: [number, number];
     if (zoomYDomain) {
-      // Add small padding to zoomed area
-      const range = zoomYDomain.max - zoomYDomain.min;
-      const padding = range * 0.05;
-      domain = [zoomYDomain.min - padding, zoomYDomain.max + padding];
+      // Use exact selection range for precise zoom
+      domain = [zoomYDomain.min, zoomYDomain.max];
     } else {
       domain = baseDomain;
     }
@@ -567,8 +582,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     if (!zoomXIndices || boxPlotData.length === 0) {
       return boxPlotData;
     }
-    // Calculate approximate bar width
-    const chartWidth = 800; // Approximate chart width
+    // Calculate bar width using measured chart width
     const plotWidth = chartWidth - chartMargin.left - chartMargin.right;
     const barWidth = plotWidth / boxPlotData.length;
 
@@ -579,7 +593,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       const barCenter = chartMargin.left + index * barWidth + barWidth / 2;
       return barCenter >= zoomXIndices.start && barCenter <= zoomXIndices.end;
     });
-  }, [boxPlotData, zoomXIndices, chartMargin.left, chartMargin.right]);
+  }, [boxPlotData, zoomXIndices, chartWidth, chartMargin.left, chartMargin.right]);
 
   // Check if zoomed
   const isZoomed = zoomYDomain !== null || zoomXIndices !== null;
@@ -772,7 +786,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
               )}
             </div>
           </div>
-          <div className="h-[416px]">
+          <div ref={chartContainerRef} className="h-[416px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={filteredBoxPlotData}
