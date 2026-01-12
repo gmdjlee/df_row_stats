@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import {
   ComposedChart,
   Bar,
@@ -237,50 +237,76 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
   // Zoom state for drag selection
   const [zoomDomain, setZoomDomain] = useState<{ min: number; max: number } | null>(null);
-  const [dragStart, setDragStart] = useState<number | null>(null);
-  const [dragEnd, setDragEnd] = useState<number | null>(null);
+  const [dragStartY, setDragStartY] = useState<number | null>(null);
+  const [dragEndY, setDragEndY] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Ref to store current domain for event handlers
+  const currentDomainRef = useRef<[number, number]>([-10, 10]);
+
+  // Chart dimensions for coordinate conversion
+  const chartMargin = { top: 20, right: 30, left: 20, bottom: 30 };
+  const chartHeight = 320; // h-80 = 20rem = 320px
 
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
     onDetect(outlierResult);
   };
 
-  // Drag zoom handlers
-  const handleMouseDown = (e: { yValue?: number }) => {
-    if (e.yValue !== undefined) {
-      setDragStart(e.yValue);
-      setDragEnd(e.yValue);
+  // Convert pixel Y coordinate to data value
+  const pixelToValue = useCallback((chartY: number): number => {
+    const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
+    const domain = currentDomainRef.current;
+    // chartY is relative to chart area, Y axis is inverted (top = max, bottom = min)
+    const ratio = chartY / plotHeight;
+    return domain[1] - ratio * (domain[1] - domain[0]);
+  }, [chartHeight, chartMargin.top, chartMargin.bottom]);
+
+  // Drag zoom handlers - using chartY coordinate
+  const handleMouseDown = useCallback((e: { chartY?: number }) => {
+    if (e.chartY !== undefined && e.chartY !== null && e.chartY >= 0) {
+      const yValue = pixelToValue(e.chartY);
+      setDragStartY(yValue);
+      setDragEndY(yValue);
       setIsDragging(true);
     }
-  };
+  }, [pixelToValue]);
 
-  const handleMouseMove = (e: { yValue?: number }) => {
-    if (isDragging && e.yValue !== undefined) {
-      setDragEnd(e.yValue);
+  const handleMouseMove = useCallback((e: { chartY?: number }) => {
+    if (e.chartY !== undefined && e.chartY !== null) {
+      const yValue = pixelToValue(e.chartY);
+      // Only update if we're dragging (check the state directly might be stale)
+      setDragEndY(prev => prev !== null ? yValue : null);
     }
-  };
+  }, [pixelToValue]);
 
-  const handleMouseUp = () => {
-    if (isDragging && dragStart !== null && dragEnd !== null) {
-      const minY = Math.min(dragStart, dragEnd);
-      const maxY = Math.max(dragStart, dragEnd);
-      // Only zoom if selection is meaningful (not just a click)
-      if (maxY - minY > 0.01) {
-        setZoomDomain({ min: minY, max: maxY });
-      }
-    }
-    setDragStart(null);
-    setDragEnd(null);
+  const handleMouseUp = useCallback(() => {
     setIsDragging(false);
-  };
+    setDragStartY(currentStart => {
+      setDragEndY(currentEnd => {
+        if (currentStart !== null && currentEnd !== null) {
+          const minY = Math.min(currentStart, currentEnd);
+          const maxY = Math.max(currentStart, currentEnd);
+          const range = maxY - minY;
+          const domain = currentDomainRef.current;
+          const currentRange = domain[1] - domain[0];
+          // Only zoom if selection is meaningful (at least 2% of current range)
+          if (range > currentRange * 0.02) {
+            setZoomDomain({ min: minY, max: maxY });
+          }
+        }
+        return null;
+      });
+      return null;
+    });
+  }, []);
 
-  const handleZoomReset = () => {
+  const handleZoomReset = useCallback(() => {
     setZoomDomain(null);
-    setDragStart(null);
-    setDragEnd(null);
+    setDragStartY(null);
+    setDragEndY(null);
     setIsDragging(false);
-  };
+  }, []);
 
   const summary = useMemo(() => {
     const flat = data.data.flat().filter(x => !isNaN(x));
@@ -477,13 +503,18 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
   // Apply zoom domain if set (from drag selection)
   const yDomain = useMemo((): [number, number] => {
+    let domain: [number, number];
     if (zoomDomain) {
       // Add small padding to zoomed area
       const range = zoomDomain.max - zoomDomain.min;
       const padding = range * 0.05;
-      return [zoomDomain.min - padding, zoomDomain.max + padding];
+      domain = [zoomDomain.min - padding, zoomDomain.max + padding];
+    } else {
+      domain = baseDomain;
     }
-    return baseDomain;
+    // Keep ref in sync for event handlers
+    currentDomainRef.current = domain;
+    return domain;
   }, [baseDomain, zoomDomain]);
 
   return (
@@ -814,14 +845,14 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   )}
                 />
                 {/* Selection rectangle during drag */}
-                {isDragging && dragStart !== null && dragEnd !== null && (
+                {isDragging && dragStartY !== null && dragEndY !== null && (
                   <ReferenceArea
-                    y1={dragStart}
-                    y2={dragEnd}
+                    y1={dragStartY}
+                    y2={dragEndY}
                     fill="#3b82f6"
-                    fillOpacity={0.2}
+                    fillOpacity={0.3}
                     stroke="#3b82f6"
-                    strokeOpacity={0.5}
+                    strokeWidth={2}
                   />
                 )}
               </ComposedChart>
