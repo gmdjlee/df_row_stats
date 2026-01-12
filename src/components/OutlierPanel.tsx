@@ -295,13 +295,18 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   // Get all outliers for scatter plot (per-row detection)
   const scatterOutliers = useMemo(() => {
     if (!result) return [];
-    return result.outlierIndices.map(([row, col]) => ({
-      name: data.rowIds?.[row] || `Row ${row + 1}`,
-      y: data.data[row][col],
-      rowIndex: row,
-      colIndex: col,
-      colName: data.headers?.[col] || `Col ${col + 1}`
-    }));
+    return result.outlierIndices
+      .filter(([row, col]) => {
+        const value = data.data[row]?.[col];
+        return typeof value === 'number' && !isNaN(value);
+      })
+      .map(([row, col]) => ({
+        name: data.rowIds?.[row] || `Row ${row + 1}`,
+        y: data.data[row][col],
+        rowIndex: row,
+        colIndex: col,
+        colName: data.headers?.[col] || `Col ${col + 1}`
+      }));
   }, [result, data]);
 
   // Calculate Y axis domain to include all data points (whiskers + outliers)
@@ -452,15 +457,18 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.outlierIndices.map(([row, col], i) => (
-                    <tr key={i} className="border-t border-slate-100">
-                      <td className="px-3 py-2">{data.rowIds?.[row] || `Row ${row + 1}`}</td>
-                      <td className="px-3 py-2">Col {col + 1}</td>
-                      <td className="px-3 py-2 text-right font-mono text-red-600">
-                        {data.data[row][col].toFixed(4)}
-                      </td>
-                    </tr>
-                  ))}
+                  {result.outlierIndices.map(([row, col], i) => {
+                    const value = data.data[row]?.[col];
+                    return (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="px-3 py-2">{data.rowIds?.[row] || `Row ${row + 1}`}</td>
+                        <td className="px-3 py-2">Col {col + 1}</td>
+                        <td className="px-3 py-2 text-right font-mono text-red-600">
+                          {typeof value === 'number' && !isNaN(value) ? value.toFixed(4) : 'N/A'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {result.outlierIndices.length === 0 && (
@@ -515,6 +523,38 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                   content={({ active, payload }) => {
                     if (active && payload && payload.length > 0) {
                       const d = payload[0].payload;
+
+                      // Check if this is an outlier scatter point (has colName property)
+                      if (d.colName !== undefined) {
+                        return (
+                          <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
+                            <div className="font-semibold mb-2 text-red-600">Outlier</div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between gap-4">
+                                <span className="text-slate-500">Row:</span>
+                                <span className="font-mono">{d.name}</span>
+                              </div>
+                              <div className="flex justify-between gap-4">
+                                <span className="text-slate-500">Column:</span>
+                                <span className="font-mono">{d.colName}</span>
+                              </div>
+                              <div className="flex justify-between gap-4">
+                                <span className="text-slate-500">Value:</span>
+                                <span className="font-mono text-red-600 font-semibold">
+                                  {typeof d.y === 'number' ? d.y.toFixed(4) : d.y}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Box plot data - verify required properties exist
+                      if (d.max === undefined || d.q3 === undefined || d.median === undefined ||
+                          d.q1 === undefined || d.min === undefined) {
+                        return null;
+                      }
+
                       return (
                         <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
                           <div className="font-semibold mb-2">{d.name}</div>
@@ -543,7 +583,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                               <span className="text-slate-500">IQR:</span>
                               <span className="font-mono">{(d.q3 - d.q1).toFixed(4)}</span>
                             </div>
-                            {d.outliers.length > 0 && (
+                            {d.outliers && d.outliers.length > 0 && (
                               <div className="mt-2 pt-2 border-t border-slate-200">
                                 <span className="text-red-600 font-medium">
                                   Outliers: {d.outliers.length}
