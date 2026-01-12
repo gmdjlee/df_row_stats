@@ -7,8 +7,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Scatter,
-  Cell,
   Legend,
   Customized
 } from 'recharts';
@@ -16,8 +14,8 @@ import { detectOutliers } from '../lib/outlier';
 import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult, NormalizeMode } from '../types';
 import { percentile, median as calcMedian } from '../lib/utils/math';
 
-// Custom BoxPlot rendering component using Customized
-interface BoxPlotCustomizedProps {
+// Custom BoxPlot + Scatter rendering component using Customized
+interface BoxPlotWithScatterProps {
   xAxisMap?: Record<string, {
     scale: (value: string) => number | undefined;
     bandwidth?: number | (() => number);
@@ -29,7 +27,7 @@ interface BoxPlotCustomizedProps {
       data?: Array<{ x?: number; width?: number }>;
     };
   }>;
-  data?: Array<{
+  boxPlotData?: Array<{
     name: string;
     displayName: string;
     q1: number;
@@ -38,13 +36,19 @@ interface BoxPlotCustomizedProps {
     lowerWhisker: number;
     upperWhisker: number;
   }>;
+  scatterData?: Map<string, Array<{
+    y: number;
+    colIndex: number;
+    colName: string;
+    isOutlier: boolean;
+  }>>;
   offset?: { left: number; top: number; width: number; height: number };
 }
 
-const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
-  const { xAxisMap, yAxisMap, data, formattedGraphicalItems, offset } = props;
+const BoxPlotWithScatter = (props: BoxPlotWithScatterProps) => {
+  const { xAxisMap, yAxisMap, boxPlotData, scatterData, formattedGraphicalItems, offset } = props;
 
-  if (!xAxisMap || !yAxisMap || !data || data.length === 0) return null;
+  if (!xAxisMap || !yAxisMap || !boxPlotData || boxPlotData.length === 0) return null;
 
   const xAxis = xAxisMap['0'] || Object.values(xAxisMap)[0];
   const yAxis = yAxisMap['0'] || Object.values(yAxisMap)[0];
@@ -65,17 +69,17 @@ const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
   } else if (formattedGraphicalItems?.[0]?.props?.data?.[0]?.width) {
     // Try to get from formatted items (Bar component)
     barWidth = formattedGraphicalItems[0].props.data[0].width;
-  } else if (offset && data.length > 0) {
+  } else if (offset && boxPlotData.length > 0) {
     // Calculate from offset and data count
-    barWidth = (offset.width * 0.8) / data.length;
+    barWidth = (offset.width * 0.8) / boxPlotData.length;
   } else {
     // Fallback to reasonable default
     barWidth = 40;
   }
 
   return (
-    <g className="recharts-boxplot-layer">
-      {data.map((item, index) => {
+    <g className="recharts-boxplot-scatter-layer">
+      {boxPlotData.map((item, index) => {
         const { name, q1, q3, median, lowerWhisker, upperWhisker } = item;
 
         // Get x position for this category
@@ -111,8 +115,36 @@ const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
         const xLeft = xCenter - boxWidth / 2;
         const whiskerWidth = boxWidth * 0.5;
 
+        // Get scatter points for this row
+        const rowPoints = scatterData?.get(name) || [];
+
         return (
           <g key={`boxplot-${index}`}>
+            {/* Scatter points - render behind box plot */}
+            {rowPoints.map((point, pointIndex) => {
+              const yPixel = yScale(point.y);
+              if (yPixel === undefined || yPixel === null || isNaN(yPixel)) return null;
+
+              // Spread points horizontally within the bar width to avoid overlap
+              const spreadWidth = barWidth * 0.6;
+              const pointsCount = rowPoints.length;
+              const xOffset = pointsCount > 1
+                ? (pointIndex / (pointsCount - 1) - 0.5) * spreadWidth
+                : 0;
+
+              return (
+                <circle
+                  key={`scatter-${index}-${pointIndex}`}
+                  cx={xCenter + xOffset}
+                  cy={yPixel}
+                  r={4}
+                  fill={point.isOutlier ? '#dc2626' : '#93c5fd'}
+                  stroke={point.isOutlier ? '#b91c1c' : '#3b82f6'}
+                  strokeWidth={1}
+                  opacity={0.8}
+                />
+              );
+            })}
             {/* Lower Whisker Line (vertical) */}
             <line
               x1={xCenter}
@@ -156,6 +188,7 @@ const BoxPlotCustomized = (props: BoxPlotCustomizedProps) => {
               width={boxWidth}
               height={Math.abs(yQ3 - yQ1) || 1}
               fill="#60a5fa"
+              fillOpacity={0.7}
               stroke="#3b82f6"
               strokeWidth={1.5}
             />
@@ -298,9 +331,51 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return chartData;
   }, [data]);
 
-  // Get all data points for scatter plot (to show normal points too)
+  // Get all data points for scatter plot, grouped by row for proper positioning
+  // Each row will have its own array of scatter points that share the same x position
+  const scatterDataByRow = useMemo(() => {
+    if (!data.data || data.data.length === 0) return new Map<string, Array<{
+      y: number;
+      colIndex: number;
+      colName: string;
+      isOutlier: boolean;
+    }>>();
+
+    const pointsByRow = new Map<string, Array<{
+      y: number;
+      colIndex: number;
+      colName: string;
+      isOutlier: boolean;
+    }>>();
+
+    for (let row = 0; row < data.data.length; row++) {
+      const rowName = `${row}`;
+      const rowPoints: Array<{
+        y: number;
+        colIndex: number;
+        colName: string;
+        isOutlier: boolean;
+      }> = [];
+
+      for (let col = 0; col < data.data[row].length; col++) {
+        const val = data.data[row][col];
+        if (typeof val === 'number' && !isNaN(val)) {
+          const isOutlier = result?.outlierMask?.[row]?.[col] ?? false;
+          rowPoints.push({
+            y: val,
+            colIndex: col,
+            colName: data.headers?.[col] || `Col ${col + 1}`,
+            isOutlier
+          });
+        }
+      }
+      pointsByRow.set(rowName, rowPoints);
+    }
+    return pointsByRow;
+  }, [data, result]);
+
+  // Flatten all data points for domain calculation and total count
   const allDataPoints = useMemo(() => {
-    if (!data.data || data.data.length === 0) return [];
     const points: Array<{
       name: string;
       displayName: string;
@@ -311,14 +386,13 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       isOutlier: boolean;
     }> = [];
 
-    for (let row = 0; row < data.data.length; row++) {
-      for (let col = 0; col < data.data[row].length; col++) {
+    for (let row = 0; row < (data.data?.length || 0); row++) {
+      for (let col = 0; col < (data.data[row]?.length || 0); col++) {
         const val = data.data[row][col];
         if (typeof val === 'number' && !isNaN(val)) {
-          // Check if this point is an outlier
           const isOutlier = result?.outlierMask?.[row]?.[col] ?? false;
           points.push({
-            name: `${row}`,  // Use row index as unique key
+            name: `${row}`,
             displayName: data.rowIds?.[row] || `Row ${row + 1}`,
             y: val,
             rowIndex: row,
@@ -332,16 +406,26 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return points;
   }, [data, result]);
 
-  // Calculate Y axis domain to include all data points
-  const yDomain = useMemo((): [number | 'auto', number | 'auto'] => {
-    if (allDataPoints.length === 0) return ['auto', 'auto'];
+  // Calculate Y axis domain to include all data points (including negative values)
+  const yDomain = useMemo((): [number, number] => {
+    if (allDataPoints.length === 0) return [-10, 10]; // Default reasonable range
 
     const allValues = allDataPoints.map(p => p.y);
     let minVal = Math.min(...allValues);
     let maxVal = Math.max(...allValues);
 
-    // Add 5% padding
-    const padding = (maxVal - minVal) * 0.05 || 1;
+    // Ensure we have a valid range
+    if (minVal === maxVal) {
+      // All values are the same, create a range around it
+      const range = Math.abs(minVal) * 0.1 || 1;
+      minVal = minVal - range;
+      maxVal = maxVal + range;
+    }
+
+    // Add 10% padding for better visibility
+    const range = maxVal - minVal;
+    const padding = range * 0.1;
+
     return [minVal - padding, maxVal + padding];
   }, [allDataPoints]);
 
@@ -537,6 +621,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 <YAxis
                   tick={{ fontSize: 12 }}
                   domain={yDomain}
+                  allowDataOverflow={false}
+                  tickFormatter={(value) => typeof value === 'number' ? value.toFixed(1) : value}
                   label={{
                     value: 'Value',
                     angle: -90,
@@ -638,26 +724,16 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 />
                 {/* Hidden bar to establish the data domain and x-axis categories */}
                 <Bar dataKey="q3" fill="transparent" />
-                {/* Custom BoxPlot rendering */}
+                {/* Custom BoxPlot + Scatter rendering */}
                 <Customized
-                  component={(props: BoxPlotCustomizedProps) => (
-                    <BoxPlotCustomized {...props} data={boxPlotData} />
+                  component={(props: BoxPlotWithScatterProps) => (
+                    <BoxPlotWithScatter
+                      {...props}
+                      boxPlotData={boxPlotData}
+                      scatterData={scatterDataByRow}
+                    />
                   )}
                 />
-                {/* All data points - normal points in light blue, outliers in red */}
-                <Scatter
-                  name="Data Points"
-                  data={allDataPoints}
-                  dataKey="y"
-                  fill="#93c5fd"
-                >
-                  {allDataPoints.map((point, index) => (
-                    <Cell
-                      key={`point-${index}`}
-                      fill={point.isOutlier ? '#dc2626' : '#93c5fd'}
-                    />
-                  ))}
-                </Scatter>
               </ComposedChart>
             </ResponsiveContainer>
           </div>
