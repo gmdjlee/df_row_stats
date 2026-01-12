@@ -120,7 +120,7 @@ const BoxPlotWithScatter = (props: BoxPlotWithScatterProps) => {
 
         return (
           <g key={`boxplot-${index}`}>
-            {/* Scatter points - render behind box plot */}
+            {/* Outlier points only - render behind box plot */}
             {rowPoints.map((point, pointIndex) => {
               const yPixel = yScale(point.y);
               if (yPixel === undefined || yPixel === null || isNaN(yPixel)) return null;
@@ -134,14 +134,14 @@ const BoxPlotWithScatter = (props: BoxPlotWithScatterProps) => {
 
               return (
                 <circle
-                  key={`scatter-${index}-${pointIndex}`}
+                  key={`outlier-${index}-${pointIndex}`}
                   cx={xCenter + xOffset}
                   cy={yPixel}
-                  r={4}
-                  fill={point.isOutlier ? '#dc2626' : '#93c5fd'}
-                  stroke={point.isOutlier ? '#b91c1c' : '#3b82f6'}
-                  strokeWidth={1}
-                  opacity={0.8}
+                  r={5}
+                  fill="#dc2626"
+                  stroke="#b91c1c"
+                  strokeWidth={1.5}
+                  opacity={0.9}
                 />
               );
             })}
@@ -234,10 +234,17 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     threshold: 3.0
   });
 
+  // Zoom state: 1 = 100%, 2 = 200% (zoomed in), 0.5 = 50% (zoomed out)
+  const [zoomLevel, setZoomLevel] = useState(1);
+
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
     onDetect(outlierResult);
   };
+
+  const handleZoomIn = () => setZoomLevel(prev => Math.min(prev * 1.5, 10));
+  const handleZoomOut = () => setZoomLevel(prev => Math.max(prev / 1.5, 0.1));
+  const handleZoomReset = () => setZoomLevel(1);
 
   const summary = useMemo(() => {
     const flat = data.data.flat().filter(x => !isNaN(x));
@@ -331,15 +338,17 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return chartData;
   }, [data]);
 
-  // Get all data points for scatter plot, grouped by row for proper positioning
-  // Each row will have its own array of scatter points that share the same x position
-  const scatterDataByRow = useMemo(() => {
-    if (!data.data || data.data.length === 0) return new Map<string, Array<{
-      y: number;
-      colIndex: number;
-      colName: string;
-      isOutlier: boolean;
-    }>>();
+  // Get ONLY outlier points for scatter plot, grouped by row for proper positioning
+  // Normal points are excluded to keep the chart clean
+  const outlierDataByRow = useMemo(() => {
+    if (!data.data || data.data.length === 0 || !result?.outlierMask) {
+      return new Map<string, Array<{
+        y: number;
+        colIndex: number;
+        colName: string;
+        isOutlier: boolean;
+      }>>();
+    }
 
     const pointsByRow = new Map<string, Array<{
       y: number;
@@ -359,13 +368,14 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
       for (let col = 0; col < data.data[row].length; col++) {
         const val = data.data[row][col];
-        if (typeof val === 'number' && !isNaN(val)) {
-          const isOutlier = result?.outlierMask?.[row]?.[col] ?? false;
+        const isOutlier = result.outlierMask[row]?.[col] ?? false;
+        // Only include outliers
+        if (typeof val === 'number' && !isNaN(val) && isOutlier) {
           rowPoints.push({
             y: val,
             colIndex: col,
             colName: data.headers?.[col] || `Col ${col + 1}`,
-            isOutlier
+            isOutlier: true
           });
         }
       }
@@ -407,6 +417,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   }, [data, result]);
 
   // Calculate Y axis domain to include all data points (including negative values)
+  // Apply zoom level to the domain
   const yDomain = useMemo((): [number, number] => {
     if (allDataPoints.length === 0) return [-10, 10]; // Default reasonable range
 
@@ -417,17 +428,23 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     // Ensure we have a valid range
     if (minVal === maxVal) {
       // All values are the same, create a range around it
-      const range = Math.abs(minVal) * 0.1 || 1;
-      minVal = minVal - range;
-      maxVal = maxVal + range;
+      const rangeVal = Math.abs(minVal) * 0.1 || 1;
+      minVal = minVal - rangeVal;
+      maxVal = maxVal + rangeVal;
     }
 
     // Add 10% padding for better visibility
     const range = maxVal - minVal;
     const padding = range * 0.1;
+    const baseMin = minVal - padding;
+    const baseMax = maxVal + padding;
 
-    return [minVal - padding, maxVal + padding];
-  }, [allDataPoints]);
+    // Apply zoom: zoom > 1 means zoomed in (smaller range), zoom < 1 means zoomed out
+    const center = (baseMin + baseMax) / 2;
+    const halfRange = (baseMax - baseMin) / 2 / zoomLevel;
+
+    return [center - halfRange, center + halfRange];
+  }, [allDataPoints, zoomLevel]);
 
   return (
     <div className="space-y-6">
@@ -585,17 +602,47 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       {/* Box Plot Visualization */}
       {boxPlotData.length > 0 && (
         <div className="bg-white rounded-lg border border-slate-200 p-4">
-          <h3 className="font-medium text-slate-900 mb-3">
-            Data Distribution (Box Plot)
-            <span className="ml-2 text-sm font-normal text-slate-500">
-              • {allDataPoints.length} data points
-              {result && result.outlierCount > 0 && (
-                <span className="text-red-600 ml-1">
-                  ({result.outlierCount} outliers)
-                </span>
-              )}
-            </span>
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-medium text-slate-900">
+              Data Distribution (Box Plot)
+              <span className="ml-2 text-sm font-normal text-slate-500">
+                • {allDataPoints.length} data points
+                {result && result.outlierCount > 0 && (
+                  <span className="text-red-600 ml-1">
+                    ({result.outlierCount} outliers)
+                  </span>
+                )}
+              </span>
+            </h3>
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500">Zoom:</span>
+              <button
+                onClick={handleZoomOut}
+                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300"
+                title="Zoom Out"
+              >
+                -
+              </button>
+              <span className="text-sm font-mono w-16 text-center">
+                {Math.round(zoomLevel * 100)}%
+              </span>
+              <button
+                onClick={handleZoomIn}
+                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300"
+                title="Zoom In"
+              >
+                +
+              </button>
+              <button
+                onClick={handleZoomReset}
+                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 ml-1"
+                title="Reset Zoom"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
@@ -716,7 +763,6 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                     { value: 'Q1 ~ Q3 (IQR)', type: 'rect' as const, color: '#60a5fa' },
                     { value: 'Whiskers', type: 'line' as const, color: '#64748b' },
                     { value: 'Median', type: 'line' as const, color: '#1e40af' },
-                    { value: 'Normal Points', type: 'circle' as const, color: '#93c5fd' },
                     ...(result && result.outlierCount > 0
                       ? [{ value: 'Outliers', type: 'circle' as const, color: '#dc2626' }]
                       : [])
@@ -724,13 +770,13 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 />
                 {/* Hidden bar to establish the data domain and x-axis categories */}
                 <Bar dataKey="q3" fill="transparent" />
-                {/* Custom BoxPlot + Scatter rendering */}
+                {/* Custom BoxPlot + Outliers rendering (normal points excluded) */}
                 <Customized
                   component={(props: BoxPlotWithScatterProps) => (
                     <BoxPlotWithScatter
                       {...props}
                       boxPlotData={boxPlotData}
-                      scatterData={scatterDataByRow}
+                      scatterData={outlierDataByRow}
                     />
                   )}
                 />
@@ -741,10 +787,10 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
             <div className="flex gap-6 flex-wrap">
               <span>• Box shows Q1 to Q3 (IQR)</span>
               <span>• Whiskers extend to 1.5 × IQR</span>
-              <span className="text-blue-400">• Blue dots = normal points</span>
               {result && result.outlierCount > 0 && (
-                <span className="text-red-600">• Red dots = outliers</span>
+                <span className="text-red-600">• Red dots = outliers only</span>
               )}
+              <span>• Use zoom controls to adjust view</span>
             </div>
           </div>
         </div>
