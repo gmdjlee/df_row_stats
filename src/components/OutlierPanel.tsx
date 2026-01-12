@@ -8,7 +8,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
-  Customized
+  Customized,
+  ReferenceArea
 } from 'recharts';
 import { detectOutliers } from '../lib/outlier';
 import { DataMatrix, OutlierConfig, OutlierMethod, OutlierResult, NormalizeMode } from '../types';
@@ -234,17 +235,52 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     threshold: 3.0
   });
 
-  // Zoom state: 1 = 100%, 2 = 200% (zoomed in), 0.5 = 50% (zoomed out)
-  const [zoomLevel, setZoomLevel] = useState(1);
+  // Zoom state for drag selection
+  const [zoomDomain, setZoomDomain] = useState<{ min: number; max: number } | null>(null);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragEnd, setDragEnd] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
     onDetect(outlierResult);
   };
 
-  const handleZoomIn = () => setZoomLevel(prev => Math.min(prev * 1.5, 10));
-  const handleZoomOut = () => setZoomLevel(prev => Math.max(prev / 1.5, 0.1));
-  const handleZoomReset = () => setZoomLevel(1);
+  // Drag zoom handlers
+  const handleMouseDown = (e: { yValue?: number }) => {
+    if (e.yValue !== undefined) {
+      setDragStart(e.yValue);
+      setDragEnd(e.yValue);
+      setIsDragging(true);
+    }
+  };
+
+  const handleMouseMove = (e: { yValue?: number }) => {
+    if (isDragging && e.yValue !== undefined) {
+      setDragEnd(e.yValue);
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (isDragging && dragStart !== null && dragEnd !== null) {
+      const minY = Math.min(dragStart, dragEnd);
+      const maxY = Math.max(dragStart, dragEnd);
+      // Only zoom if selection is meaningful (not just a click)
+      if (maxY - minY > 0.01) {
+        setZoomDomain({ min: minY, max: maxY });
+      }
+    }
+    setDragStart(null);
+    setDragEnd(null);
+    setIsDragging(false);
+  };
+
+  const handleZoomReset = () => {
+    setZoomDomain(null);
+    setDragStart(null);
+    setDragEnd(null);
+    setIsDragging(false);
+  };
 
   const summary = useMemo(() => {
     const flat = data.data.flat().filter(x => !isNaN(x));
@@ -416,9 +452,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return points;
   }, [data, result]);
 
-  // Calculate Y axis domain to include all data points (including negative values)
-  // Apply zoom level to the domain
-  const yDomain = useMemo((): [number, number] => {
+  // Calculate base Y axis domain (full data range)
+  const baseDomain = useMemo((): [number, number] => {
     if (allDataPoints.length === 0) return [-10, 10]; // Default reasonable range
 
     const allValues = allDataPoints.map(p => p.y);
@@ -436,15 +471,20 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     // Add 10% padding for better visibility
     const range = maxVal - minVal;
     const padding = range * 0.1;
-    const baseMin = minVal - padding;
-    const baseMax = maxVal + padding;
 
-    // Apply zoom: zoom > 1 means zoomed in (smaller range), zoom < 1 means zoomed out
-    const center = (baseMin + baseMax) / 2;
-    const halfRange = (baseMax - baseMin) / 2 / zoomLevel;
+    return [minVal - padding, maxVal + padding];
+  }, [allDataPoints]);
 
-    return [center - halfRange, center + halfRange];
-  }, [allDataPoints, zoomLevel]);
+  // Apply zoom domain if set (from drag selection)
+  const yDomain = useMemo((): [number, number] => {
+    if (zoomDomain) {
+      // Add small padding to zoomed area
+      const range = zoomDomain.max - zoomDomain.min;
+      const padding = range * 0.05;
+      return [zoomDomain.min - padding, zoomDomain.max + padding];
+    }
+    return baseDomain;
+  }, [baseDomain, zoomDomain]);
 
   return (
     <div className="space-y-6">
@@ -616,31 +656,20 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
             </h3>
             {/* Zoom Controls */}
             <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-500">Zoom:</span>
-              <button
-                onClick={handleZoomOut}
-                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300"
-                title="Zoom Out"
-              >
-                -
-              </button>
-              <span className="text-sm font-mono w-16 text-center">
-                {Math.round(zoomLevel * 100)}%
-              </span>
-              <button
-                onClick={handleZoomIn}
-                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300"
-                title="Zoom In"
-              >
-                +
-              </button>
-              <button
-                onClick={handleZoomReset}
-                className="px-2 py-1 text-sm bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 ml-1"
-                title="Reset Zoom"
-              >
-                Reset
-              </button>
+              {zoomDomain ? (
+                <>
+                  <span className="text-sm text-blue-600 font-medium">Zoomed</span>
+                  <button
+                    onClick={handleZoomReset}
+                    className="px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 text-blue-700 rounded border border-blue-300"
+                    title="Reset Zoom"
+                  >
+                    Reset Zoom
+                  </button>
+                </>
+              ) : (
+                <span className="text-sm text-slate-500">Drag to zoom</span>
+              )}
             </div>
           </div>
           <div className="h-80">
@@ -648,6 +677,10 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
               <ComposedChart
                 data={boxPlotData}
                 margin={{ top: 20, right: 30, left: 20, bottom: 30 }}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
@@ -780,6 +813,17 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                     />
                   )}
                 />
+                {/* Selection rectangle during drag */}
+                {isDragging && dragStart !== null && dragEnd !== null && (
+                  <ReferenceArea
+                    y1={dragStart}
+                    y2={dragEnd}
+                    fill="#3b82f6"
+                    fillOpacity={0.2}
+                    stroke="#3b82f6"
+                    strokeOpacity={0.5}
+                  />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -790,7 +834,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
               {result && result.outlierCount > 0 && (
                 <span className="text-red-600">• Red dots = outliers only</span>
               )}
-              <span>• Use zoom controls to adjust view</span>
+              <span>• Drag vertically to zoom in on a region</span>
             </div>
           </div>
         </div>
