@@ -1,4 +1,5 @@
 import Papa from 'papaparse';
+import { parserLogger, logAnalysisSummary } from './logger';
 
 export interface ParseConfig {
   delimiter?: 'auto' | '\t' | ',' | ' ';
@@ -17,8 +18,13 @@ export function detectDelimiter(text: string): string {
     if (char in counts) counts[char]++;
   }
 
-  return Object.entries(counts)
+  const delimiter = Object.entries(counts)
     .sort((a, b) => b[1] - a[1])[0][0];
+
+  const delimiterName = delimiter === '\t' ? 'tab' : delimiter === ',' ? 'comma' : 'space';
+  parserLogger.debug(`Auto-detected delimiter: ${delimiterName} (count: ${counts[delimiter]})`);
+
+  return delimiter;
 }
 
 /**
@@ -28,6 +34,9 @@ export function parseText(
   text: string,
   config: ParseConfig = {}
 ): { data: number[][]; headers?: string[]; rowIds?: string[] } {
+  parserLogger.time('text-parsing');
+  parserLogger.info('Parsing text data');
+
   const delimiter = config.delimiter === 'auto'
     ? detectDelimiter(text)
     : config.delimiter || '\t';
@@ -39,6 +48,7 @@ export function parseText(
   if (config.hasHeader) {
     headers = lines[0].split(delimiter).map(h => h.trim());
     startIdx = 1;
+    parserLogger.debug(`Headers: ${headers.join(', ')}`);
   }
 
   const rowIds: string[] = [];
@@ -56,6 +66,14 @@ export function parseText(
     }
   }
 
+  parserLogger.timeEnd('text-parsing');
+  logAnalysisSummary.dataLoad({
+    rows: data.length,
+    cols: data[0]?.length || 0,
+    hasHeaders: !!headers,
+    hasRowIds: config.hasRowIndex
+  });
+
   return { data, headers, rowIds };
 }
 
@@ -63,6 +81,9 @@ export function parseText(
  * CSV 파일 파싱
  */
 export function parseCSVFile(file: File): Promise<{ data: number[][]; headers?: string[] }> {
+  parserLogger.time('csv-parsing');
+  parserLogger.info(`Parsing CSV file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
+
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
       complete: (result) => {
@@ -71,9 +92,21 @@ export function parseCSVFile(file: File): Promise<{ data: number[][]; headers?: 
         const data = rows.slice(1).map(row =>
           row.map(cell => parseFloat(cell) || NaN)
         );
+
+        parserLogger.timeEnd('csv-parsing');
+        logAnalysisSummary.dataLoad({
+          rows: data.length,
+          cols: data[0]?.length || 0,
+          hasHeaders: true,
+          hasRowIds: false
+        });
+
         resolve({ data, headers });
       },
-      error: (error) => reject(error)
+      error: (error) => {
+        parserLogger.error('CSV parsing failed:', error);
+        reject(error);
+      }
     });
   });
 }

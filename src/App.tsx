@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { DataInput } from './components/DataInput';
 import { OutlierPanel } from './components/OutlierPanel';
 import { StatsPanel } from './components/StatsPanel';
@@ -6,6 +6,7 @@ import { ResultPanel } from './components/ResultPanel';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { DataMatrix, OutlierResult, StatsResult, NormalizeMode } from './types';
 import { applyNormalization } from './lib/utils/normalize';
+import { appLogger, dataLogger } from './lib/utils/logger';
 
 type Tab = 'input' | 'outlier' | 'stats' | 'results' | 'explanation';
 
@@ -16,6 +17,17 @@ export default function App() {
   const [outlierResult, setOutlierResult] = useState<OutlierResult | null>(null);
   const [statsResults, setStatsResults] = useState<StatsResult[] | null>(null);
   const [normalizeMode, setNormalizeMode] = useState<NormalizeMode>('none');
+
+  // Log app initialization
+  useEffect(() => {
+    appLogger.info('Statistical Analysis App initialized');
+    appLogger.debug('Environment:', import.meta.env.MODE);
+  }, []);
+
+  // Log tab changes
+  useEffect(() => {
+    appLogger.debug(`Tab changed to: ${tab}`);
+  }, [tab]);
 
   // Apply normalization to data when normalizeMode changes
   const normalizedData = useMemo(() => {
@@ -36,6 +48,11 @@ export default function App() {
   }, [cleanedData, normalizeMode]);
 
   const handleDataLoad = useCallback((matrix: DataMatrix, mode: NormalizeMode) => {
+    dataLogger.group('Data Load');
+    dataLogger.info(`Data loaded: ${matrix.data.length} rows × ${matrix.data[0]?.length || 0} columns`);
+    dataLogger.debug('Normalization mode:', mode);
+    dataLogger.groupEnd();
+
     setData(matrix);
     setNormalizeMode(mode);
     setCleanedData(null);
@@ -45,6 +62,7 @@ export default function App() {
   }, []);
 
   const handleOutlierDetect = useCallback((result: OutlierResult) => {
+    appLogger.info('Outlier detection completed');
     setOutlierResult(result);
     if (data) {
       setCleanedData({
@@ -55,6 +73,7 @@ export default function App() {
   }, [data]);
 
   const handleStatsAnalyze = useCallback((results: StatsResult[]) => {
+    appLogger.info('Statistical analysis completed');
     setStatsResults(results);
     setTab('results');
   }, []);

@@ -3,6 +3,7 @@ import { detectIQR } from './iqr';
 import { detectMAD } from './mad';
 import { OutlierConfig, OutlierResult, OutlierAction } from '../../types';
 import { mean, median } from '../utils/math';
+import { outlierLogger, logAnalysisSummary } from '../utils/logger';
 
 /**
  * 2D 데이터에 대한 이상치 탐지
@@ -16,6 +17,11 @@ export function detectOutliers(
   const outlierIndices: Array<[number, number]> = [];
   let allBounds: { lower: number; upper: number } | undefined;
   const allStats: Record<string, number> = {};
+
+  outlierLogger.time('outlier-detection');
+  outlierLogger.info(`Starting outlier detection with method: ${method}`);
+  outlierLogger.debug('Config:', config);
+  outlierLogger.debug(`Data dimensions: ${data.length} rows × ${data[0]?.length || 0} cols`);
 
   // 행별로 탐지
   for (let i = 0; i < data.length; i++) {
@@ -50,17 +56,31 @@ export function detectOutliers(
 
   const outlierCount = outlierIndices.length;
   const totalCells = data.length * (data[0]?.length || 0);
+  const outlierRatio = totalCells > 0 ? outlierCount / totalCells : 0;
 
-  return {
+  const result: OutlierResult = {
     method,
     outlierCount,
-    outlierRatio: totalCells > 0 ? outlierCount / totalCells : 0,
+    outlierRatio,
     outlierMask,
     outlierIndices,
     bounds: allBounds,
     statistics: allStats,
     cleanedData: applyOutlierAction(data, outlierMask, 'replace_nan')
   };
+
+  outlierLogger.timeEnd('outlier-detection');
+  logAnalysisSummary.outlier(result);
+
+  if (outlierCount > 0 && outlierCount <= 20) {
+    outlierLogger.groupCollapsed('Outlier positions');
+    outlierIndices.forEach(([row, col]) => {
+      outlierLogger.debug(`  Row ${row}, Col ${col}: ${data[row][col]}`);
+    });
+    outlierLogger.groupEnd();
+  }
+
+  return result;
 }
 
 /**
