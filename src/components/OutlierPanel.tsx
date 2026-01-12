@@ -259,24 +259,37 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   const pixelYToValue = useCallback((chartY: number): number => {
     const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
     const domain = currentYDomainRef.current;
-    // chartY is relative to chart area, Y axis is inverted (top = max, bottom = min)
-    const ratio = chartY / plotHeight;
+    // chartY is relative to SVG container (includes margin), so subtract margin.top
+    // Y axis is inverted (top = max, bottom = min)
+    const plotY = chartY - chartMargin.top;
+    const ratio = plotY / plotHeight;
     return domain[1] - ratio * (domain[1] - domain[0]);
   }, [chartHeight, chartMargin.top, chartMargin.bottom]);
 
   // Drag zoom handlers - using chartX and chartY coordinates
   const handleMouseDown = useCallback((e: { chartX?: number; chartY?: number }) => {
     if (e.chartX !== undefined && e.chartY !== undefined &&
-        e.chartX !== null && e.chartY !== null &&
-        e.chartX >= 0 && e.chartY >= 0) {
-      const yValue = pixelYToValue(e.chartY);
-      setDragStartY(yValue);
-      setDragEndY(yValue);
-      setDragStartX(e.chartX);
-      setDragEndX(e.chartX);
-      setIsDragging(true);
+        e.chartX !== null && e.chartY !== null) {
+      // chartX and chartY are relative to SVG container (include margins)
+      // Only start dragging if within the plot area
+      const plotWidth = 800 - chartMargin.left - chartMargin.right; // Approximate
+      const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
+      const inPlotArea =
+        e.chartX >= chartMargin.left &&
+        e.chartX <= chartMargin.left + plotWidth &&
+        e.chartY >= chartMargin.top &&
+        e.chartY <= chartMargin.top + plotHeight;
+
+      if (inPlotArea) {
+        const yValue = pixelYToValue(e.chartY);
+        setDragStartY(yValue);
+        setDragEndY(yValue);
+        setDragStartX(e.chartX);
+        setDragEndX(e.chartX);
+        setIsDragging(true);
+      }
     }
-  }, [pixelYToValue]);
+  }, [pixelYToValue, chartHeight, chartMargin.left, chartMargin.right, chartMargin.top, chartMargin.bottom]);
 
   const handleMouseMove = useCallback((e: { chartX?: number; chartY?: number }) => {
     if (e.chartX !== undefined && e.chartY !== undefined &&
@@ -560,8 +573,10 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     const barWidth = plotWidth / boxPlotData.length;
 
     // Filter rows based on pixel position
+    // zoomXIndices stores chartX values which include margin.left (SVG-relative)
+    // So barCenter also needs to be in SVG coordinates
     return boxPlotData.filter((_, index) => {
-      const barCenter = index * barWidth + barWidth / 2;
+      const barCenter = chartMargin.left + index * barWidth + barWidth / 2;
       return barCenter >= zoomXIndices.start && barCenter <= zoomXIndices.end;
     });
   }, [boxPlotData, zoomXIndices, chartMargin.left, chartMargin.right]);
@@ -902,7 +917,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 {isDragging && dragStartY !== null && dragEndY !== null && dragStartX !== null && dragEndX !== null && (
                   <Customized
                     component={() => {
-                      const x = Math.min(dragStartX, dragEndX) + chartMargin.left;
+                      // dragStartX/dragEndX are chartX values which already include margin.left
+                      const x = Math.min(dragStartX, dragEndX);
                       const width = Math.abs(dragEndX - dragStartX);
                       const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
                       const domain = currentYDomainRef.current;
