@@ -65,7 +65,8 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
     URL.revokeObjectURL(url);
   };
 
-  // Prepare data for chart: x-axis = row index, each line = column (sample)
+  // Prepare data for chart: x-axis = row index (unique), each line = column (sample)
+  // Use index as unique key to prevent chart merging when rowIds are duplicated
   const chartData = useMemo(() => {
     if (!data?.data || data.data.length === 0) return [];
 
@@ -73,8 +74,8 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
 
     return data.data.map((row, rowIndex) => {
       const point: Record<string, string | number> = {
-        index: rowIndex,
-        rowId: rowIds[rowIndex]
+        index: rowIndex,           // Unique index for chart x-axis
+        displayRowId: rowIds[rowIndex]  // Display label (may have duplicates)
       };
       row.forEach((val, colIndex) => {
         const colName = data.headers?.[colIndex] || `Sample ${colIndex + 1}`;
@@ -248,8 +249,13 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
               <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
-                  dataKey={data.rowIds ? 'rowId' : 'index'}
+                  dataKey="index"
                   tick={{ fontSize: 11 }}
+                  tickFormatter={(value) => {
+                    // Use displayRowId if available for labels
+                    const item = chartData[value];
+                    return String(item?.displayRowId ?? `Row ${value + 1}`);
+                  }}
                   label={{
                     value: xAxisLabel,
                     position: 'insideBottom',
@@ -278,11 +284,10 @@ export function ResultPanel({ outlierResult, statsResults, data, normalizeMode }
                   }}
                   formatter={(value: number, name: string) => [value.toFixed(4), name]}
                   labelFormatter={(label) => {
-                    if (data.rowIds) {
-                      return `Row: ${label}`;
-                    }
                     const idx = label as number;
-                    return `Row ${idx + 1}${data.rowIds?.[idx] ? ` (${data.rowIds[idx]})` : ''}`;
+                    const item = chartData[idx];
+                    const displayId = item?.displayRowId ?? `Row ${idx + 1}`;
+                    return `Row: ${displayId}`;
                   }}
                 />
                 <Legend content={renderLegend} />

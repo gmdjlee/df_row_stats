@@ -31,6 +31,7 @@ interface BoxPlotCustomizedProps {
   }>;
   data?: Array<{
     name: string;
+    displayName: string;
     q1: number;
     q3: number;
     median: number;
@@ -216,11 +217,13 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   }, [data]);
 
   // Box plot data for each row (outlier detection is per-row)
+  // IMPORTANT: Use unique 'name' (based on rowIndex) to prevent chart merging when rowIds are duplicated
   const boxPlotData = useMemo(() => {
     if (!data.data || data.data.length === 0) return [];
 
     const chartData: Array<{
-      name: string;
+      name: string;           // Unique identifier for chart (index-based)
+      displayName: string;    // Display label (rowId or Row N)
       rowIndex: number;
       min: number;
       q1: number;
@@ -261,17 +264,20 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       data.data[row].forEach((val, colIndex) => {
         if (!isNaN(val) && (val < lowerBound || val > upperBound)) {
           outliers.push({
-            x: data.rowIds?.[row] || `Row ${row + 1}`,
+            x: `${row}`,  // Use row index as unique x key
             y: val,
             colIndex
           });
         }
       });
 
-      const name = data.rowIds?.[row] || `Row ${row + 1}`;
+      // Use row index as unique name to prevent merging in charts
+      const name = `${row}`;
+      const displayName = data.rowIds?.[row] || `Row ${row + 1}`;
 
       chartData.push({
         name,
+        displayName,
         rowIndex: row,
         min: Math.min(...sorted),
         q1,
@@ -292,41 +298,52 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     return chartData;
   }, [data]);
 
-  // Get all outliers for scatter plot (per-row detection)
-  const scatterOutliers = useMemo(() => {
-    if (!result) return [];
-    return result.outlierIndices
-      .filter(([row, col]) => {
-        const value = data.data[row]?.[col];
-        return typeof value === 'number' && !isNaN(value);
-      })
-      .map(([row, col]) => ({
-        name: data.rowIds?.[row] || `Row ${row + 1}`,
-        y: data.data[row][col],
-        rowIndex: row,
-        colIndex: col,
-        colName: data.headers?.[col] || `Col ${col + 1}`
-      }));
-  }, [result, data]);
+  // Get all data points for scatter plot (to show normal points too)
+  const allDataPoints = useMemo(() => {
+    if (!data.data || data.data.length === 0) return [];
+    const points: Array<{
+      name: string;
+      displayName: string;
+      y: number;
+      rowIndex: number;
+      colIndex: number;
+      colName: string;
+      isOutlier: boolean;
+    }> = [];
 
-  // Calculate Y axis domain to include all data points (whiskers + outliers)
-  const yDomain = useMemo((): [number | 'auto', number | 'auto'] => {
-    if (boxPlotData.length === 0) return ['auto', 'auto'];
-
-    let minVal = Math.min(...boxPlotData.map(d => d.lowerWhisker));
-    let maxVal = Math.max(...boxPlotData.map(d => d.upperWhisker));
-
-    // Include outliers in domain
-    if (scatterOutliers.length > 0) {
-      const outlierValues = scatterOutliers.map(o => o.y);
-      minVal = Math.min(minVal, ...outlierValues);
-      maxVal = Math.max(maxVal, ...outlierValues);
+    for (let row = 0; row < data.data.length; row++) {
+      for (let col = 0; col < data.data[row].length; col++) {
+        const val = data.data[row][col];
+        if (typeof val === 'number' && !isNaN(val)) {
+          // Check if this point is an outlier
+          const isOutlier = result?.outlierMask?.[row]?.[col] ?? false;
+          points.push({
+            name: `${row}`,  // Use row index as unique key
+            displayName: data.rowIds?.[row] || `Row ${row + 1}`,
+            y: val,
+            rowIndex: row,
+            colIndex: col,
+            colName: data.headers?.[col] || `Col ${col + 1}`,
+            isOutlier
+          });
+        }
+      }
     }
+    return points;
+  }, [data, result]);
+
+  // Calculate Y axis domain to include all data points
+  const yDomain = useMemo((): [number | 'auto', number | 'auto'] => {
+    if (allDataPoints.length === 0) return ['auto', 'auto'];
+
+    const allValues = allDataPoints.map(p => p.y);
+    let minVal = Math.min(...allValues);
+    let maxVal = Math.max(...allValues);
 
     // Add 5% padding
-    const padding = (maxVal - minVal) * 0.05;
+    const padding = (maxVal - minVal) * 0.05 || 1;
     return [minVal - padding, maxVal + padding];
-  }, [boxPlotData, scatterOutliers]);
+  }, [allDataPoints]);
 
   return (
     <div className="space-y-6">
@@ -486,11 +503,14 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
         <div className="bg-white rounded-lg border border-slate-200 p-4">
           <h3 className="font-medium text-slate-900 mb-3">
             Data Distribution (Box Plot)
-            {result && result.outlierCount > 0 && (
-              <span className="ml-2 text-sm font-normal text-red-600">
-                • {result.outlierCount} outliers shown in red
-              </span>
-            )}
+            <span className="ml-2 text-sm font-normal text-slate-500">
+              • {allDataPoints.length} data points
+              {result && result.outlierCount > 0 && (
+                <span className="text-red-600 ml-1">
+                  ({result.outlierCount} outliers)
+                </span>
+              )}
+            </span>
           </h3>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
@@ -502,6 +522,11 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                 <XAxis
                   dataKey="name"
                   tick={{ fontSize: 11 }}
+                  tickFormatter={(value) => {
+                    // Find the displayName for this index
+                    const item = boxPlotData.find(d => d.name === value);
+                    return item?.displayName || value;
+                  }}
                   label={{
                     value: 'Row',
                     position: 'insideBottom',
@@ -524,15 +549,18 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                     if (active && payload && payload.length > 0) {
                       const d = payload[0].payload;
 
-                      // Check if this is an outlier scatter point (has colName property)
+                      // Check if this is a scatter data point (has colName property)
                       if (d.colName !== undefined) {
+                        const isOutlier = d.isOutlier === true;
                         return (
                           <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
-                            <div className="font-semibold mb-2 text-red-600">Outlier</div>
+                            <div className={`font-semibold mb-2 ${isOutlier ? 'text-red-600' : 'text-blue-600'}`}>
+                              {isOutlier ? 'Outlier' : 'Data Point'}
+                            </div>
                             <div className="space-y-1">
                               <div className="flex justify-between gap-4">
                                 <span className="text-slate-500">Row:</span>
-                                <span className="font-mono">{d.name}</span>
+                                <span className="font-mono">{d.displayName || d.name}</span>
                               </div>
                               <div className="flex justify-between gap-4">
                                 <span className="text-slate-500">Column:</span>
@@ -540,7 +568,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                               </div>
                               <div className="flex justify-between gap-4">
                                 <span className="text-slate-500">Value:</span>
-                                <span className="font-mono text-red-600 font-semibold">
+                                <span className={`font-mono font-semibold ${isOutlier ? 'text-red-600' : ''}`}>
                                   {typeof d.y === 'number' ? d.y.toFixed(4) : d.y}
                                 </span>
                               </div>
@@ -557,7 +585,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
 
                       return (
                         <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
-                          <div className="font-semibold mb-2">{d.name}</div>
+                          <div className="font-semibold mb-2">{d.displayName || d.name}</div>
                           <div className="space-y-1">
                             <div className="flex justify-between gap-4">
                               <span className="text-slate-500">Max:</span>
@@ -602,6 +630,7 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                     { value: 'Q1 ~ Q3 (IQR)', type: 'rect' as const, color: '#60a5fa' },
                     { value: 'Whiskers', type: 'line' as const, color: '#64748b' },
                     { value: 'Median', type: 'line' as const, color: '#1e40af' },
+                    { value: 'Normal Points', type: 'circle' as const, color: '#93c5fd' },
                     ...(result && result.outlierCount > 0
                       ? [{ value: 'Outliers', type: 'circle' as const, color: '#dc2626' }]
                       : [])
@@ -615,28 +644,30 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
                     <BoxPlotCustomized {...props} data={boxPlotData} />
                   )}
                 />
-                {/* Outliers */}
-                {result && scatterOutliers.length > 0 && (
-                  <Scatter
-                    name="Outliers"
-                    data={scatterOutliers}
-                    dataKey="y"
-                    fill="#dc2626"
-                  >
-                    {scatterOutliers.map((_, index) => (
-                      <Cell key={`outlier-${index}`} fill="#dc2626" />
-                    ))}
-                  </Scatter>
-                )}
+                {/* All data points - normal points in light blue, outliers in red */}
+                <Scatter
+                  name="Data Points"
+                  data={allDataPoints}
+                  dataKey="y"
+                  fill="#93c5fd"
+                >
+                  {allDataPoints.map((point, index) => (
+                    <Cell
+                      key={`point-${index}`}
+                      fill={point.isOutlier ? '#dc2626' : '#93c5fd'}
+                    />
+                  ))}
+                </Scatter>
               </ComposedChart>
             </ResponsiveContainer>
           </div>
           <div className="mt-3 text-sm text-slate-500">
-            <div className="flex gap-6">
-              <span>• Box shows Q1 to Q3 (Interquartile Range)</span>
+            <div className="flex gap-6 flex-wrap">
+              <span>• Box shows Q1 to Q3 (IQR)</span>
               <span>• Whiskers extend to 1.5 × IQR</span>
+              <span className="text-blue-400">• Blue dots = normal points</span>
               {result && result.outlierCount > 0 && (
-                <span className="text-red-600">• Red dots = detected outliers</span>
+                <span className="text-red-600">• Red dots = outliers</span>
               )}
             </div>
           </div>
