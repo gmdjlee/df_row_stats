@@ -269,14 +269,22 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   useEffect(() => {
     const updateWidth = () => {
       if (chartContainerRef.current) {
-        setChartWidth(chartContainerRef.current.clientWidth);
+        const containerWidth = chartContainerRef.current.clientWidth;
+        const containerHeight = chartContainerRef.current.clientHeight;
+        console.log('[Container Size]', {
+          containerWidth,
+          containerHeight,
+          chartHeightConst: chartHeight,
+          heightMismatch: containerHeight !== chartHeight
+        });
+        setChartWidth(containerWidth);
       }
     };
 
     updateWidth();
     window.addEventListener('resize', updateWidth);
     return () => window.removeEventListener('resize', updateWidth);
-  }, []);
+  }, [chartHeight]);
 
   const handleDetect = () => {
     const outlierResult = detectOutliers(data.data, config);
@@ -284,14 +292,29 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
   };
 
   // Convert pixel Y coordinate to data value
-  const pixelYToValue = useCallback((chartY: number): number => {
+  const pixelYToValue = useCallback((chartY: number, logContext?: string): number => {
     const plotHeight = chartHeight - chartMargin.top - chartMargin.bottom;
     const domain = currentYDomainRef.current;
     // chartY is relative to SVG container (includes margin), so subtract margin.top
     // Y axis is inverted (top = max, bottom = min)
     const plotY = chartY - chartMargin.top;
     const ratio = plotY / plotHeight;
-    return domain[1] - ratio * (domain[1] - domain[0]);
+    const value = domain[1] - ratio * (domain[1] - domain[0]);
+
+    if (logContext) {
+      console.log(`[${logContext}] pixelYToValue:`, {
+        chartY,
+        chartHeight,
+        marginTop: chartMargin.top,
+        marginBottom: chartMargin.bottom,
+        plotHeight,
+        domain,
+        plotY,
+        ratio,
+        resultValue: value
+      });
+    }
+    return value;
   }, [chartHeight, chartMargin.top, chartMargin.bottom]);
 
   // Drag zoom handlers - using chartX and chartY coordinates
@@ -309,7 +332,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
         e.chartY <= chartMargin.top + plotHeight;
 
       if (inPlotArea) {
-        const yValue = pixelYToValue(e.chartY);
+        console.log('[MouseDown] Raw event:', { chartX: e.chartX, chartY: e.chartY, chartWidth, chartHeight });
+        const yValue = pixelYToValue(e.chartY, 'MouseDown');
         // Store in refs for immediate access
         dragStartYRef.current = yValue;
         dragEndYRef.current = yValue;
@@ -355,6 +379,8 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     const startX = dragStartXRef.current;
     const endX = dragEndXRef.current;
 
+    console.log('[MouseUp] Drag values:', { startY, endY, startX, endX });
+
     if (startY !== null && endY !== null && startX !== null && endX !== null) {
       const minY = Math.min(startY, endY);
       const maxY = Math.max(startY, endY);
@@ -368,8 +394,16 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
       const shouldZoomY = yRange > currentYRange * 0.005;
       const shouldZoomX = xDiff > 10;
 
+      console.log('[MouseUp] Zoom decision:', {
+        minY, maxY, yRange,
+        domain, currentYRange,
+        shouldZoomY, shouldZoomX,
+        xDiff
+      });
+
       if (shouldZoomY || shouldZoomX) {
         if (shouldZoomY) {
+          console.log('[MouseUp] Setting zoomYDomain:', { min: minY, max: maxY });
           setZoomYDomain({ min: minY, max: maxY });
         }
         if (shouldZoomX) {
@@ -601,8 +635,10 @@ export function OutlierPanel({ data, onDetect, result, normalizeMode }: Props) {
     if (zoomYDomain) {
       // Use exact selection range for precise zoom
       domain = [zoomYDomain.min, zoomYDomain.max];
+      console.log('[yDomain] Applying zoom domain:', { zoomYDomain, resultDomain: domain });
     } else {
       domain = baseDomain;
+      console.log('[yDomain] Using base domain:', { baseDomain, resultDomain: domain });
     }
     // Keep ref in sync for event handlers
     currentYDomainRef.current = domain;
